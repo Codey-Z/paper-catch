@@ -1,0 +1,38 @@
+# scoring-rules.yaml — 打分公式参数
+# 程序化读取，修改后立即生效
+
+# 综合评分权重
+weights:
+  keyword_match: 0.40    # 关键词匹配度权重
+  citation_weighted: 0.30  # 引用数加权权重
+  recency_decay: 0.20    # 时效衰减权重
+  journal_quality: 0.10  # 期刊质量权重
+
+# 关键词匹配参数
+keyword:
+  # 无摘要时匹配度降权系数
+  no_abstract_penalty: 0.5
+  # 匹配方式：substring（子串匹配，支持词干级别）
+  match_mode: substring
+
+# 引用数加权参数
+citation:
+  # 对数归一化的引用数上限
+  citation_max: 5000
+
+# 时效衰减参数
+recency:
+  # 衰减速率 λ
+  lambda: 0.3
+  # 衰减下限 floor，保证老论文不直接归零
+  floor: 0.1
+
+# 期刊质量参数见 journal-tiers.yaml
+
+# 可下载性加分（用于在 Top N 筛选中优先选择可下载的论文）
+# reliability 从 search_source_registry.yaml 的 downloadable_providers 读取
+downloadability_bonus:
+  high: 0.15       # Springer/Nature/arXiv/PLOS — 无需凭证即可下载
+  medium: 0.05     # MDPI/Copernicus — 大概率可下载
+  low: 0.0         # Wiley/Elsevier/Science/PNAS — 需要 API Key 或 CloakBrowser
+  none: -0.15      # Frontiers 等无 provider 的源 — 无法下载全文

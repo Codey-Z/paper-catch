@@ -1,0 +1,53 @@
+# domain-supplement.yaml — 领域审阅补充模板
+# 支持多领域切换，由 pipeline_params.json 中的 domain 字段指定
+
+plant_genomics:
+  name: "植物基因组"
+  keywords: ["plant genome", "crop genome", "plant LLM", "gene discovery"]
+  extra_sections:
+    - title: "物种信息"
+      fields:
+        - label: "学名"
+        - label: "品种/品系"
+        - label: "基因组版本"
+    - title: "训练数据"
+      fields:
+        - label: "数据集名称"
+        - label: "样本量（正/负）"
+        - label: "负样本构建方式"
+    - title: "模型架构"
+      fields:
+        - label: "模型类型（Transformer/CNN/GNN/混合）"
+        - label: "参数规模"
+        - label: "输入序列长度"
+    - title: "下游任务"
+      fields:
+        - label: "基因发现 / 表达预测 / 变异效应预测 / 染色质状态 / 其他"
+    - title: "与项目指标关联"
+      fields:
+        - label: "本项目研究物种是否与该论文物种相同/近缘"
+        - label: "论文方法是否可迁移到本项目物种"
+
+# 示例：未来可扩展
+# single_cell:
+#   name: "单细胞组学"
+#   keywords: ["single cell", "scRNA-seq", "spatial transcriptomics"]
+#   extra_sections:
+#     - title: "实验平台"
+#       fields:
+#         - label: "测序平台"
+#         - label: "建库方法"
+#         - label: "细胞数"
+
+# epigenomics:
+#   name: "表观遗传学"
+#   keywords: ["epigenomics", "DNA methylation", "histone modification", "chromatin accessibility"]
+#   extra_sections:
+#     - title: "实验平台"
+#       fields:
+#         - label: "测序平台"
+#         - label: "建库方法"
+#         - label: "样本类型"
+#     - title: "分析维度"
+#       fields:
+#         - label: "甲基化 / 组蛋白修饰 / 染色质开放性 / 3D 结构"

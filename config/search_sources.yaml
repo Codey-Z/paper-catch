@@ -1,0 +1,235 @@
+# search_source_registry.yaml
+# 唯一权威搜索源配置——auto-paper-pipeline 和 paper-fetch-skill 共同参考
+# 修改此文件即可增删搜索源，无需改动 Python 代码
+#
+# 职责边界：
+#   - auto-paper-pipeline（编排层）：读取 sources 节，驱动搜索 API 调用
+#   - paper-fetch-skill（全文获取层）：读取 downloadable_providers 节，
+#     驱动 DOI→Provider 路由和全文获取
+#   - 两者共享此配置但不交叉调用对方内部逻辑
+
+version: 1
+
+# ── 搜索源定义 ──────────────────────────────────────────────────
+# 每个源包含：API 端点、参数模板、重试策略、领域归属、默认启用状态
+
+sources:
+  semantic_scholar:
+    display_name: "Semantic Scholar"
+    role: search                    # search | metadata | both
+    api_endpoint: "https://api.semanticscholar.org/graph/v1/paper/search"
+    method: GET
+    rate_limit: "1 req/s (free), 5 req/s (with key)"
+    coverage: "综合学术"
+    freshness: "中（1-3月延迟）"
+    fields_returns: [title, doi, abstract, citationCount, year, venue, authors, paperType]
+    default_enabled: true
+    domain_affinity: []             # 空表示全领域
+    provider_hint: null             # 无直接对应 paper-fetch provider
+    params:
+      query: {required: true, type: string}
+      year: {type: string, example: "2022-2026"}
+      limit: {type: int, default: 100, max: 100}
+      fields: {type: string, default: "title,externalIds,abstract,citationCount,year,venue,authors,paperType"}
+    retry:
+      max_retries: 3
+      backoff: [2, 4, 8]
+      retry_on: [429, 500, 502, 503]
+
+  crossref:
+    display_name: "Crossref"
+    role: both                      # 搜索 + 元数据查询（paper-fetch 用 /works/{doi}）
+    api_endpoint: "https://api.crossref.org/works"
+    method: GET
+    rate_limit: "50 req/s (free)"
+    coverage: "元数据最全"
+    freshness: "低（正式发表后收录）"
+    fields_returns: [title, doi, authors, journal, abstract]
+    default_enabled: true
+    domain_affinity: []
+    provider_hint: crossref         # paper-fetch 中 crossref provider
+    params:
+      query: {required: true, type: string}
+      filter: {type: string, example: "from-pub-date:2022,until-pub-date:2026"}
+      rows: {type: int, default: 20, max: 1000}
+      select: {type: string}
+    retry:
+      max_retries: 3
+      backoff: [2, 4, 8]
+      retry_on: [429, 500, 502, 503]
+
+  arxiv:
+    display_name: "arXiv"
+    role: both                      # 搜索 + ID 精确查询（paper-fetch 用 id_list）
+    api_endpoint: "https://export.arxiv.org/api/query"
+    method: GET
+    rate_limit: "无硬性限制，建议间隔 3 秒"
+    coverage: "CS/物理/定量生物"
+    freshness: "高（预印本首发）"
+    fields_returns: [title, arxiv_id, abstract, categories]
+    default_enabled: true
+    domain_affinity: [cs, physics, q-bio, math, stat]
+    provider_hint: arxiv            # paper-fetch 中 arxiv provider
+    params:
+      search_query: {type: string, example: 'all:"plant genome foundation model"'}
+      id_list: {type: string, description: "精确 ID 查询，逗号分隔"}
+      start: {type: int, default: 0}
+      max_results: {type: int, default: 50}
+      sortBy: {type: enum, values: [relevance, submittedDate], default: relevance}
+    retry:
+      max_retries: 3
+      backoff: [3, 6, 12]          # arXiv 建议更长间隔
+      retry_on: [429, 500, 503]
+
+  biorxiv:
+    display_name: "bioRxiv"
+    role: search
+    api_endpoint: "https://api.biorxiv.org/details/biorxiv"
+    method: GET
+    rate_limit: "无硬性限制"
+    coverage: "生命科学预印本"
+    freshness: "极高（比正式发表早 6-12 月）"
+    fields_returns: [title, doi, abstract, category, date]
+    default_enabled: true
+    domain_affinity: [biology, bioinformatics, genomics]
+    provider_hint: biorxiv
+    params:
+      cursor: {type: int, default: 0}
+      limit: {type: int, default: 100, max: 100}
+    note: "无原生关键词搜索，按日期范围检索后在标题/摘要中做关键词匹配"
+    retry:
+      max_retries: 3
+      backoff: [2, 4, 8]
+      retry_on: [429, 500, 502, 503]
+
+  pubmed:
+    display_name: "PubMed"
+    role: search
+    api_endpoint_search: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+    api_endpoint_fetch: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+    method: GET
+    rate_limit: "3 req/s (free), 10 req/s (with API key)"
+    coverage: "生物医学最全索引"
+    freshness: "中（含 ahead-of-print）"
+    fields_returns: [title, doi, abstract, journal, mesh_terms]
+    default_enabled: false          # 按领域条件自动开启
+    domain_affinity: [biomedicine, plant_genomics, single_cell, epigenomics]
+    provider_hint: null
+    auto_enable_rules:
+      - field: domain
+        contains_any: [plant_genomics, single_cell, epigenomics, biomedicine]
+    params:
+      esearch:
+        db: {const: "pubmed"}
+        term: {required: true, type: string}
+        mindate: {type: string}
+        maxdate: {type: string}
+        retmax: {type: int, default: 100}
+        retmode: {const: "json"}
+        api_key: {type: string, env: "PUBMED_API_KEY"}
+      efetch:
+        db: {const: "pubmed"}
+        id: {required: true, type: string, description: "PMIDs 逗号分隔"}
+        retmode: {const: "xml"}
+    retry:
+      max_retries: 3
+      backoff: [2, 4, 8]
+      retry_on: [429, 500, 502, 503]
+
+# ── 可下载能力矩阵 ──────────────────────────────────────────────
+# 声明 paper-fetch 支持的 Provider，供打分阶段计算 "可下载性" 加分
+# reliability: high=几乎一定能下载 medium=大概率能下载 low=需密钥/可能失败
+
+downloadable_providers:
+  - provider: arxiv
+    doi_prefixes: ["10.48550/"]
+    domains: ["arxiv.org"]
+    reliability: high
+
+  - provider: biorxiv
+    doi_prefixes: ["10.1101/"]
+    domains: ["biorxiv.org", "medrxiv.org"]
+    reliability: medium
+    note: "paper-fetch-skill 已内置 bioRxiv/medRxiv provider，支持 PDF 全文获取与 API 元数据检索"
+
+  - provider: plos
+    doi_prefixes: ["10.1371/"]
+    domains: ["journals.plos.org"]
+    reliability: high
+
+  - provider: springer
+    doi_prefixes: ["10.1038/", "10.1007/", "10.1186/"]
+    domains: ["springer.com", "nature.com", "biomedcentral.com"]
+    reliability: high
+    note: "CLI 直连下载，无需 API Key，已验证成功"
+
+  - provider: elsevier
+    doi_prefixes: ["10.1016/"]
+    domains: ["sciencedirect.com", "elsevier.com"]
+    reliability: low
+
+  - provider: wiley
+    doi_prefixes: ["10.1002/", "10.1111/"]
+    domains: ["onlinelibrary.wiley.com"]
+    reliability: low
+    note: "需要 CloakBrowser，若无头环境无法下载二进制则回退为元数据"
+
+  - provider: mdpi
+    doi_prefixes: ["10.3390/"]
+    domains: ["mdpi.com"]
+    reliability: medium
+
+  - provider: copernicus
+    doi_prefixes: ["10.5194/"]
+    domains: []
+    reliability: medium
+
+  - provider: ieee
+    doi_prefixes: ["10.1109/"]
+    domains: ["ieeexplore.ieee.org"]
+    reliability: low
+
+  - provider: science
+    doi_prefixes: ["10.1126/"]
+    domains: ["science.org"]
+    reliability: low
+
+  - provider: pnas
+    doi_prefixes: ["10.1073/"]
+    domains: ["pnas.org"]
+    reliability: low
+
+  - provider: oxfordacademic
+    doi_prefixes: ["10.1093/"]
+    domains: ["academic.oup.com"]
+    reliability: low
+
+  - provider: acs
+    doi_prefixes: ["10.1021/"]
+    domains: ["pubs.acs.org"]
+    reliability: low
+
+  - provider: iop
+    doi_prefixes: ["10.1088/"]
+    domains: ["iopscience.iop.org"]
+    reliability: low
+
+  - provider: aip
+    doi_prefixes: ["10.1063/"]
+    domains: ["pubs.aip.org"]
+    reliability: low
+
+  - provider: ams
+    doi_prefixes: ["10.1175/"]
+    domains: ["journals.ametsoc.org"]
+    reliability: low
+
+  - provider: royalsocietypublishing
+    doi_prefixes: ["10.1098/"]
+    domains: ["royalsocietypublishing.org"]
+    reliability: low
+
+  - provider: annualreviews
+    doi_prefixes: ["10.1146/"]
+    domains: ["annualreviews.org"]
+    reliability: low

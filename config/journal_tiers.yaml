@@ -1,0 +1,59 @@
+# journal-tiers.yaml — 期刊分层映射表
+# 打分公式中期刊质量维度的评分依据
+
+tiers:
+  tier1:  # 分值 1.0 — 顶级综合期刊
+    score: 1.0
+    keywords:
+      - "nature"
+      - "science"
+      - "cell"
+    exact:
+      - "Nature"
+      - "Science"
+      - "Cell"
+
+  tier1_sub:  # 分值 0.9 — 顶级子刊
+    score: 0.9
+    keywords:
+      - "nature communications"
+      - "nature genetics"
+      - "nature methods"
+      - "nature biotechnology"
+      - "nature machine intelligence"
+      - "nature computational science"
+      - "cell reports"
+      - "cell systems"
+      - "science advances"
+    exact: []
+
+  tier2:  # 分值 0.6 — 领域顶刊
+    score: 0.6
+    keywords:
+      - "pnas"
+      - "genome research"
+      - "genome biology"
+      - "nucleic acids research"
+      - "bioinformatics"
+      - "plant cell"
+      - "plant journal"
+      - "new phytologist"
+      - "the plant genome"
+      - " BMC bioinformatics"
+      - "briefings in bioinformatics"
+      - "plos computational biology"
+      - "plos genetics"
+    exact: []
+
+  tier3:  # 分值 0.4 — 领域重要期刊
+    score: 0.4
+    keywords:
+      - "frontiers"
+      - "scientific reports"
+      - "peerj"
+      - "biorxiv"
+      - "preprint"
+    exact: []
+
+# 未匹配到任何条目的默认分值
+default: 0.2
