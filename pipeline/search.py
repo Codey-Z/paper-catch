@@ -8,6 +8,8 @@ search_papers.py — 多源论文搜索脚本
 退出码：0=成功（有结果），1=部分来源失败但有结果，2=全部失败或无结果
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging

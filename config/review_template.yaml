@@ -1,0 +1,91 @@
+# Stable single-report review template for auto-paper-pipeline.
+# This project owns the runtime template. paper-obsidian-review is treated as a
+# design reference only, not as a dynamic dependency.
+
+version: 2
+output_profile: single_markdown_report
+
+output:
+  filename: "阅读报告.md"
+  description: "A single Markdown report that summarizes the selected papers, compares them, and records evidence levels."
+
+evidence_levels:
+  fulltext_supported: "结论有论文全文支撑。"
+  abstract_supported: "结论仅由摘要支撑，不得补写实验细节。"
+  metadata_inferred: "结论仅由标题、DOI、期刊、年份等元数据推断。"
+  unknown: "当前材料不足以判断。"
+
+frontmatter:
+  required:
+    - title
+    - run_id
+    - topic
+    - created
+    - scoring_mode
+    - relevance_profile
+    - evidence_policy
+    - tags
+  default_tags:
+    - paper-review
+    - auto-paper-pipeline
+
+report:
+  title_pattern: "{topic} 论文阅读报告"
+  sections:
+    - title: "基本信息"
+      instruction: "说明主题、检索时间范围、搜索源、Top N 数量、评分模式、相关性 profile、全文/摘要/元数据数量。"
+    - title: "核心结论摘要"
+      instruction: "用 5-8 条概括本批论文对该领域的主要启示；每条必须标注证据等级。"
+    - title: "研究背景与问题动因"
+      instruction: "参考 paper-obsidian-review 的写法，说明为什么该方向需要这些工作，避免泛泛宣传。"
+    - title: "核心科学问题"
+      instruction: "归纳本批论文共同面对的核心问题和子问题。"
+    - title: "论文总览表"
+      instruction: "用表格比较论文题目、年份、来源、方法类型、任务、证据等级、下载状态和为什么入选。"
+    - title: "阅读路线"
+      instruction: "给出先读 5 篇和原因；再按方法、数据集/benchmark、应用方向分组。"
+    - title: "逐篇阅读笔记"
+      instruction: "每篇论文使用 paper-obsidian-review 的单篇结构压缩成子章节。"
+      per_paper_sections:
+        - title: "基本信息"
+          instruction: "列出题目、DOI/arXiv、年份、venue、作者、链接和 evidence_level。"
+        - title: "研究背景与问题动因"
+          instruction: "说明论文为什么做，解决什么领域问题。"
+        - title: "核心科学问题"
+          instruction: "写清核心问题和子问题。"
+        - title: "问题求解路径"
+          instruction: "用“使用 X，解决 Y”的格式描述方法。"
+        - title: "方法定位"
+          instruction: "说明属于 foundation model、genomic language model、benchmark、应用系统或其他范式。"
+        - title: "输入输出"
+          instruction: "提取输入数据、输出目标和预测/生成对象；材料不足写 unknown。"
+        - title: "方法框架"
+          instruction: "按模块写清系统组成和数据流；没有全文时只写摘要支持内容。"
+        - title: "关键机制"
+          instruction: "提炼真正起作用的机制，例如 tokenization、pretraining、fine-tuning、MoE、序列建模。"
+        - title: "主要创新贡献"
+          instruction: "列出 3-6 条，强调相对已有工作的新增点；证据不足写 unknown。"
+        - title: "数据集设计 / 实验设置 / 配置依赖"
+          instruction: "按论文类型选择合适标题；没有全文时只记录摘要中明确出现的信息。"
+        - title: "复现要点"
+          instruction: "记录代码、权重、数据、环境、API key、GPU/硬件要求和主要卡点；没有材料写 unknown。"
+        - title: "与研究指标关联"
+          instruction: "说明论文如何支撑用户主题或项目指标。"
+        - title: "为什么入选"
+          instruction: "引用 top_n_dois.json 的 selection_reason、risk_flags、topic_relevance 和 score_breakdown。"
+    - title: "横向对比"
+      instruction: "比较问题、方法、输入输出、数据集、评价指标、优势、局限、复现难度。"
+    - title: "方法路线与技术趋势"
+      instruction: "把论文串成研究链条，说明 foundation model、genomic language model、AI-guided mining 等路线的关系。"
+    - title: "复现优先级建议"
+      instruction: "给出先复现哪几篇、为什么、需要什么资源、主要风险。"
+    - title: "证据审计与失败记录"
+      instruction: "汇总 fulltext_supported、abstract_supported、metadata_inferred、unknown；列出下载失败和需要人工补充的论文。"
+    - title: "开放问题与下一步检索"
+      instruction: "列出还需要追踪的问题、关键词和建议新增搜索方向。"
+
+rules:
+  - "最终只生成一个 Markdown 文件，不生成论文卡片目录、领域地图文件、阅读路线文件或总览对比文件。"
+  - "摘要级材料不得补写实验细节、结果数值、局限性和作者未明确表达的结论。"
+  - "每个关键判断必须能追溯到全文、摘要或元数据证据等级。"
+  - "优先使用学术化中文标题，避免口语化小标题。"

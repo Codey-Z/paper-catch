@@ -1,776 +1,349 @@
-# Auto Paper Pipeline — 自动论文发现与审阅流水线
+# Auto Paper Pipeline PRD
 
 ## 产品定位
 
-一个编排器型 Skills。用户输入领域关键词后，自动完成：多源搜索 → 打分排序 → 筛选 Top N → 批量下载 → 结构化审阅 → 生成 Obsidian 笔记。不直接抓论文、不直接写报告，而是指挥 paper-fetch-skill 和 paper-obsidian-review 完成各自擅长的任务。
+Auto Paper Pipeline 是一个新领域快速探索 skill。用户输入一个主题词后，系统自动扩展英文查询，完成多源搜索、前沿优先排序、主题聚类、paper-fetch CLI 批量下载，并生成一个可直接阅读和放入 Obsidian 的 Markdown 阅读报告。
+
+目标不是单纯“下载论文并总结”，而是帮助用户快速形成对新研究方向的结构化理解：核心问题、技术路线、关键论文、阅读顺序、证据强弱和后续追踪点。
 
 ## 目标用户
 
-需要系统性地追踪某个研究方向的科研人员。典型场景：进入新领域做文献调研、写基金申请需要文献支撑、定期追踪领域最新进展。
+- 刚进入新领域，需要快速建立方向地图的科研人员
+- 写基金、开题、综述前需要快速扫描前沿的研究者
+- 需要定期追踪某一方向新论文的用户
 
 ## 核心原则
 
-1. **轻编排、重委托** — 自己只做搜索和打分，下载和审阅全委托已有 skill
-2. **用户可见、可控** — 每个阶段结束展示中间结果，用户确认后再进入下一阶段
-3. **可调权重** — 打分公式的参数写在单独 YAML 文件里，用户修改后立即生效
-4. **领域可扩展** — 审阅模板引用 paper-obsidian-review 后追加领域专属补充
-5. **容错继续** — 单篇论文的下载/审阅失败不阻塞整条流水线
+1. **快速探索优先**：默认只要求用户给出主题词，其余参数自动补全。
+2. **前沿可解释**：排序不仅给分数，还给入选理由、风险标记和证据等级。
+3. **工具边界清晰**：全文获取只依赖 `paper-fetch` CLI；审阅模板由本项目维护。
+4. **单文件报告输出**：最终产物是一个 Markdown 阅读报告，不拆成多个笔记文件。
+5. **证据分级**：全文、摘要、元数据和未知信息必须区分，避免把推断写成事实。
+6. **容错继续**：单源、单篇、单笔记失败不阻塞整体流程。
 
----
+## 六阶段流水线
 
-## 五阶段流水线
-
-```
-用户输入关键词
-    ↓
-┌──────────────────────────────────────────────────────────────┐
-│ 阶段 1：参数确认（AI 对话，无脚本）                             │
-│   收集：领域关键词、排除关键词、关键词权重、语言偏好             │
-│   收集：时间范围、偏好期刊、返回数量 N、论文类型偏好             │
-│   收集：保存目录、vault 根目录、图片资源偏好（供阶段 4 直传）   │
-│   AI 负责将用户关键词翻译为英文查询词，记录到 search_queries    │
-└──────────────────────────────────────────────────────────────┘
-    ↓
-┌──────────────────────────────────────────────────────────────┐
-│ 阶段 2：多源搜索（scripts/search_papers.py）                    │
-│   并行查询 Semantic Scholar + Crossref + arXiv + bioRxiv      │
-│   可选：PubMed（生命科学领域推荐开启）                          │
-│   输出：search_results.json（去重后）                           │
-│   报告：各来源数量 + 去重统计 + 摘要覆盖率                     │
-└──────────────────────────────────────────────────────────────┘
-    ↓
-┌──────────────────────────────────────────────────────────────┐
-│ 阶段 3：打分排序（scripts/score_papers.py）                     │
-│   3a. 预筛：排除关键词命中排除词、类型不符、最低关键词命中数    │
-│   3b. 综合评分 + 排序 + 截断 Top N                             │
-│   输出：top_n_dois.json（Top N + 分数明细）                     │
-│   展示给用户确认/调整                                          │
-└──────────────────────────────────────────────────────────────┘
-    ↓
-┌──────────────────────────────────────────────────┐
-│ 阶段 4：批量下载（通过 MCP 工具直调 fetch_paper）   │
-│   遍历 Top N，逐篇调用 MCP fetch_paper 下载 Markdown │
-│   输出：papers/fulltext/ 下的 Markdown 全文           │
-│   进度报告：每下载 3 篇报告一次                      │
-│   失败处理：记录失败条目，不阻塞后续论文             │
-└──────────────────────────────────────────────────┘
-    ↓
-┌──────────────────────────────────────────────────┐
-│ 阶段 5：结构化审阅（按合并模板直接生成）            │
-│   逐篇按审阅模板 + 领域补充生成 Obsidian 笔记        │
-│   生成总览对比笔记                                  │
-│   输出：papers/reviews/ 下的 .md 笔记文件              │
-└──────────────────────────────────────────────────┘
+```text
+用户输入主题词
+  ↓
+阶段 1：参数确认
+  - quick_explore 默认入口
+  - AI 扩展英文 search_queries
+  - 写入 pipeline_params.json
+  ↓
+阶段 2：多源搜索
+  - pipeline/search.py
+  - 输出 search_results.json
+  ↓
+阶段 3：打分排序
+  - pipeline/score.py --scoring-mode frontier
+  - 输出 top_n_dois.json
+  - 包含 selection_reason / risk_flags / evidence_level
+  ↓
+阶段 4：主题聚类与阅读路线
+  - 基于 Top N 元数据和摘要由 AI 归纳
+  - 输出 cluster_summary.json
+  ↓
+阶段 5：批量下载
+  - pipeline/download.py 封装 paper-fetch CLI
+  - 输出 papers/fulltext/*.md
+  ↓
+阶段 6：结构化审阅与阅读报告
+  - 读取 config/review_template.yaml
+  - 输出 阅读报告.md
 ```
 
----
+## 用户模式
 
-## 组件协作机制
+### quick_explore
 
-> 本节明确 pipeline 与 paper-fetch-skill、paper-obsidian-review 的代码级协作方式。
+默认模式。用户只输入一个主题词，例如“植物基因组基础模型”。系统自动生成：
 
-### 阶段 4：批量下载 — 绕过 skill BLOCKING
+- `search_queries`
+- `query_expansion_notes`
+- `year_from` / `year_to`
+- `top_n`
+- `search_sources`
+- `scoring_mode=frontier`
+- `output_profile=single_markdown_report`
 
-paper-fetch-skill 的 SKILL.md 有 ⛔ BLOCKING 规则（逐篇确认保存方式、≥3 篇建议 CLI），不适用于 pipeline 的自动批量场景。解决方案：
+### tracking
 
-**pipeline 直接调用 MCP 工具 `mcp__paper-fetch__fetch_paper`，绕过 skill 指令层的 BLOCKING 检查。**
+高级模式。用户可显式配置：
 
-#### 前置依赖版本声明
+- 排除关键词
+- 关键词权重
+- 论文类型
+- 偏好期刊
+- 搜索源
+- 时间范围
+- Top N
+- 评分模式
 
-pipeline 对 paper-fetch-skill 的 MCP 接口有语义耦合，需在 SKILL.md 头部和 `pipeline_params.json` 中声明最低版本要求：
+## 组件边界
 
-```yaml
-# pipeline_params.json 中的依赖声明
-"requires": {
-  "paper-fetch-skill": ">=0.1.0"
-}
+### paper-fetch
+
+本项目不重写全文获取能力。阶段 5 只通过 `paper-fetch` CLI 获取全文，由 `pipeline/download.py` 负责重试、错误分类和结果诊断。
+
+若 `paper-fetch` 不存在，阶段 5 必须暂停，并提示用户安装 CLI。不得继续生成伪全文审阅。
+
+### paper-obsidian-review
+
+`paper-obsidian-review` 只作为模板设计参考，不作为运行时依赖。本项目维护稳定模板：
+
+```text
+config/review_template.yaml
 ```
 
-若 paper-fetch-skill 升级导致 MCP 接口签名变更，pipeline 应报错并提示用户升级，而非静默失败。
+阶段 6 只读取本项目模板、领域补充字段和下载结果。
 
-#### 阶段 4 启动前：MCP 健康检查
+## 核心接口
 
-在进入批量下载前，必须先确认 MCP server 可用：
-
-```
-步骤 1：调用 mcp__paper-fetch__provider_status() 确认 MCP server 健康
-  - 若返回正常 → 继续步骤 2
-  - 若调用失败或返回异常 → 进入降级方案（见下方）
-```
-
-#### 正常流程：MCP 批量下载
-
-阶段 1 已收集用户的保存偏好，阶段 4 将这些偏好作为 MCP 参数直接传入：
-
-```
-调用示例：
-mcp__paper-fetch__fetch_paper(
-    query = "<DOI>",
-    save_markdown = True,
-    markdown_output_dir = "<vault>/papers/fulltext/",
-    markdown_filename = "<safe_filename>.md",
-    strategy = {
-        "asset_profile": "body",       # 下载正文图片，不含补充材料
-        "allow_metadata_only_fallback": True
-    },
-    artifact_mode = "markdown-assets",
-    prefer_cache = True                 # 优先使用缓存，避免重复下载
-)
-```
-
-这样既满足了 paper-fetch-skill 用户的保存需求（在阶段 1 已确认），又不会在阶段 4 被逐篇 BLOCKING。
-
-#### 降级方案：MCP 不可用时回退 CLI
-
-当 MCP 健康检查失败或批量下载过程中连续报错（如 MCP server 崩溃），自动降级为 CLI 方式：
-
-```bash
-# 生成 query-file（每行一个 DOI）
-cat top_n_dois.json | python -c "
-import json,sys
-d=json.load(sys.stdin)
-for p in d['papers']:
-    print(p.get('doi') or p.get('arxiv_id',''))
-" > /tmp/pipeline-queries.txt
-
-# 调用 paper-fetch CLI 批量下载
-paper-fetch --query-file /tmp/pipeline-queries.txt \
-    --output-dir <vault>/papers/fulltext/ \
-    --batch-concurrency 2
-```
-
-降级触发条件：
-1. MCP `provider_status()` 调用失败（server 未启动或超时）
-2. 连续 3 篇论文的 `fetch_paper` 调用返回相同的 MCP 连接错误（非论文本身的无全文等业务错误）
-3. 降级后向用户报告："MCP 不可用，已切换为 CLI 模式下载"
-
-降级不适用的情况：若 CLI 也未安装（`paper-fetch` 命令不存在），则暂停阶段 4，向用户报告并建议安装 paper-fetch-skill。
-
-### 阶段 5：结构化审阅 — 引用式委托
-
-paper-obsidian-review **不是可调用的 API 或 MCP 服务**，它是一份 Skill 指令文档（SKILL.md），本质是 prompt 模板。解决方案：
-
-**pipeline SKILL.md 在 `references/` 下引用 paper-obsidian-review 的模板结构，AI 按合并后的模板直接生成笔记。**
-
-具体做法：
-1. pipeline SKILL.md 的阶段 5 指令中，引用 paper-obsidian-review 的单篇笔记结构和对比笔记结构
-2. 追加 `references/domain-supplement.yaml` 中当前领域的额外字段
-3. AI 读取论文 Markdown 全文后，按合并模板一次性生成 Obsidian 笔记
-
-**不复制模板内容**，而是在 SKILL.md 中写明"读取 paper-obsidian-review 的 SKILL.md 获取标准结构"，避免模板重复导致维护不同步。
-
----
-
-## 文件结构
-
-```
-auto-paper-pipeline/
-├── SKILL.md                         # 编排指令
-│
-├── references/
-│   ├── scoring-rules.yaml           # 打分公式参数（程序化读取）
-│   ├── scoring-rules.md             # 打分公式说明（人类可读）
-│   ├── search-apis.md               # 搜索 API 接口文档
-│   ├── domain-supplement.yaml       # 领域审阅补充模板（多领域，YAML 格式）
-│   └── journal-tiers.yaml           # 期刊分层映射表
-│
-└── scripts/
-    ├── search_papers.py             # 多源搜索
-    ├── score_papers.py              # 打分排序
-    └── requirements.txt             # httpx, PyYAML（最少依赖）
-```
-
-依赖数量：2 个 pip 包，不依赖浏览器、LaTeX、conda。
-
----
-
-## Python 脚本 CLI 接口
-
-### search_papers.py
-
-```bash
-# 基本用法
-python search_papers.py \
-    --keywords "plant genome foundation model" \
-    --year-from 2022 \
-    --year-to 2026 \
-    --max-results 100 \
-    --output search_results.json
-
-# 多关键词（逗号分隔，各自独立查询后合并）
-python search_papers.py \
-    --keywords "plant genome foundation model,plant LLM,gene discovery deep learning" \
-    --year-from 2022 \
-    --max-results 100 \
-    --output search_results.json
-
-# 指定搜索源
-python search_papers.py \
-    --keywords "plant genome foundation model" \
-    --sources semantic_scholar,crossref,arxiv,biorxiv,pubmed \
-    --year-from 2022 \
-    --max-results 100 \
-    --output search_results.json
-```
-
-**参数说明：**
-
-| 参数 | 必选 | 默认值 | 说明 |
-|---|---|---|---|
-| `--keywords` | ✅ | — | 逗号分隔的关键词列表（应为英文） |
-| `--sources` | ❌ | `semantic_scholar,crossref,arxiv,biorxiv` | 启用的搜索源，逗号分隔；可选值：`semantic_scholar`、`crossref`、`arxiv`、`biorxiv`、`pubmed` |
-| `--year-from` | ❌ | 2018 | 起始年份 |
-| `--year-to` | ❌ | 当前年份 | 截止年份 |
-| `--max-results` | ❌ | 100 | 每个 API 返回上限 |
-| `--output` | ✅ | — | 输出 JSON 路径 |
-| `--verbose` | ❌ | False | 打印各来源请求数和去重统计 |
-
-**退出码：** 0 = 成功（有结果），1 = 部分来源失败但有结果，2 = 全部来源失败或无结果
-
-**输出：** `search_results.json`（见下方 JSON Schema）
-
-### score_papers.py
-
-```bash
-# 基本用法
-python score_papers.py \
-    --input search_results.json \
-    --config references/scoring-rules.yaml \
-    --top-n 10 \
-    --output top_n_dois.json
-
-# 带预筛参数：排除关键词 + 最低关键词命中数 + 论文类型
-python score_papers.py \
-    --input search_results.json \
-    --config references/scoring-rules.yaml \
-    --exclude-keywords "protein LLM,protein language model" \
-    --min-keyword-hits 1 \
-    --paper-types method,empirical_study,dataset_benchmark \
-    --top-n 10 \
-    --output top_n_dois.json
-
-# 从 pipeline_params.json 自动读取预筛参数
-python score_papers.py \
-    --input search_results.json \
-    --config references/scoring-rules.yaml \
-    --params pipeline_params.json \
-    --top-n 10 \
-    --output top_n_dois.json
-
-# 不截断，输出全量排序结果
-python score_papers.py \
-    --input search_results.json \
-    --config references/scoring-rules.yaml \
-    --top-n 0 \
-    --output top_n_dois.json
-```
-
-**参数说明：**
-
-| 参数 | 必选 | 默认值 | 说明 |
-|---|---|---|---|
-| `--input` | ✅ | — | search_papers.py 输出的 JSON 路径 |
-| `--config` | ❌ | `references/scoring-rules.yaml` | 打分参数 YAML 路径 |
-| `--top-n` | ❌ | 10 | 截断数量，0 表示不截断 |
-| `--exclude-keywords` | ❌ | — | 排除关键词，逗号分隔；标题或摘要命中任一词则预筛排除 |
-| `--min-keyword-hits` | ❌ | 0 | 最低关键词命中数，低于此值的论文在预筛阶段排除 |
-| `--paper-types` | ❌ | — | 论文类型白名单，逗号分隔；可选 `method`、`empirical_study`、`review_survey`、`dataset_benchmark` |
-| `--params` | ❌ | — | pipeline_params.json 路径；若提供，自动从中读取 exclude_keywords、keyword_weights、paper_types |
-| `--output` | ✅ | — | 输出 JSON 路径 |
-| `--verbose` | ❌ | False | 打印每篇论文的分数明细 + 预筛统计 |
-
-**预筛逻辑（阶段 3a）：**
-
-在正式打分前，先执行轻量级预筛，排除明显不相关的论文，避免弱相关论文稀释 Top N 质量：
-
-1. **排除关键词过滤**：若论文标题或摘要命中任一排除关键词，直接排除
-2. **最低关键词命中数**：论文标题+摘要中命中的搜索关键词数低于 `--min-keyword-hits`，直接排除
-3. **论文类型过滤**：若指定了 `--paper-types`，通过 Semantic Scholar 的 `paperType` 字段或标题启发式判断（含"review"/"survey"判定为综述），不符合类型的排除
-
-预筛排除的论文不进入打分，但在 `--verbose` 输出中报告预筛统计（排除数、排除原因分布）。
-
-**退出码：** 0 = 成功，1 = 输入文件读取失败或为空，2 = 配置文件格式错误
-
-**输出：** `top_n_dois.json`（见下方 JSON Schema）
-
----
-
-## 阶段间状态传递 — JSON Schema
-
-### pipeline_params.json（阶段 1 输出 → 后续阶段共用）
+### pipeline_params.json
 
 ```json
 {
-  "run_id": "20260528-plant-genome",
-  "keywords": ["plant genome foundation model", "plant LLM"],
-  "search_queries": ["plant genome foundation model", "plant LLM", "gene discovery deep learning"],
-  "exclude_keywords": ["protein LLM", "protein language model"],
-  "keyword_weights": {
-    "plant genome foundation model": 1.0,
-    "plant LLM": 0.8
-  },
-  "language": "en",
-  "paper_types": ["method", "empirical_study", "dataset_benchmark"],
-  "year_from": 2022,
+  "run_id": "20260531-plant-genome",
+  "mode": "quick_explore",
+  "scoring_mode": "frontier",
+  "relevance_profile": "plant_genome_llm",
+  "output_profile": "single_markdown_report",
+  "keywords": ["植物基因组基础模型"],
+  "search_queries": [
+    "plant genome foundation model",
+    "plant genomic language model",
+    "deep learning for gene discovery in plants"
+  ],
+  "query_expansion_notes": "从中文主题扩展为英文检索词，覆盖 foundation model、language model 和 gene discovery。",
+  "exclude_keywords": [],
+  "keyword_weights": {},
+  "paper_types": [],
+  "year_from": 2021,
   "year_to": 2026,
-  "preferred_journals": ["Nature", "Nature Genetics", "Cell", "Science"],
-  "top_n": 10,
+  "top_n": 20,
+  "search_sources": ["semantic_scholar", "crossref", "arxiv", "biorxiv", "pubmed"],
   "save_dir": "papers",
-  "vault_root": "/path/to/vault",
   "asset_profile": "body",
   "domain": "plant_genomics",
-  "search_sources": ["semantic_scholar", "crossref", "arxiv", "biorxiv", "pubmed"],
-  "requires": {
-    "paper-fetch-skill": ">=0.1.0"
-  },
-  "created_at": "2026-05-28T22:00:00+08:00"
+  "created_at": "2026-05-31T00:00:00+08:00"
 }
 ```
 
-字段说明：
-- `search_queries`：AI 将用户关键词翻译为英文后的查询词列表，供搜索脚本直接使用
-- `exclude_keywords`：排除关键词，标题或摘要命中这些词的论文在预筛阶段被排除
-- `keyword_weights`：各关键词权重，默认 1.0，影响关键词匹配度计算
-- `language`：语言偏好，默认 `"en"`，仅搜索英文论文
-- `paper_types`：论文类型偏好，可选值 `method`、`empirical_study`、`review_survey`、`dataset_benchmark`
-- `vault_root`：Obsidian vault 根目录，用于解析脚本相对路径
-- `search_sources`：启用的搜索源列表，生命科学领域默认包含 bioRxiv + PubMed
-- `requires`：前置依赖版本声明，防止接口不兼容时静默失败
+### top_n_dois.json
 
-### search_results.json（阶段 2 输出 → 阶段 3 输入）
+每篇论文必须包含：
 
 ```json
 {
-  "run_id": "20260528-plant-genome",
-  "created_at": "2026-05-28T22:05:00+08:00",
-  "stats": {
-    "semantic_scholar": 85,
-    "crossref": 120,
-    "arxiv": 42,
-    "biorxiv": 35,
-    "pubmed": 68,
-    "total_before_dedup": 350,
-    "total_after_dedup": 265,
-    "duplicates_removed": 85,
-    "abstract_coverage": 0.72
+  "doi": "10.xxxx/example",
+  "title": "Example paper",
+  "year": 2026,
+  "venue": "bioRxiv",
+  "score": 0.82,
+  "score_breakdown": {
+    "keyword_match": 0.9,
+    "citation_weighted": 0.1,
+    "recency_decay": 1.0,
+    "journal_quality": 0.2,
+    "downloadability": 0.08,
+    "paper_type_bonus": 0.08,
+    "paper_type": "method",
+    "download_provider": "biorxiv",
+    "download_reliability": "medium"
   },
-  "errors": [
-    {
-      "source": "semantic_scholar",
-      "error": "HTTP 429 rate limited",
-      "retried": true,
-      "recovered": true
-    }
-  ],
-  "papers": [
-    {
-      "doi": "10.1038/s41586-024-07189-3",
-      "title": "A foundation model for plant genomics",
-      "abstract": "...",
-      "citation_count": 42,
-      "year": 2024,
-      "venue": "Nature",
-      "authors": ["Author A", "Author B"],
-      "source": ["semantic_scholar", "crossref"],
-      "arxiv_id": null,
-      "has_abstract": true,
-      "raw": {}
-    }
-  ]
+  "selection_reason": "关键词高度匹配；发表时间较新；偏方法论文；全文获取可靠性为 medium",
+  "risk_flags": ["abstract_only_before_download"],
+  "evidence_level": "abstract_supported",
+  "download_provider": "biorxiv",
+  "download_reliability": "medium",
+  "cluster_id": "method_route",
+  "recommended_reading_order": 1
 }
 ```
 
-字段说明：
-- `source`：数组，记录该论文来自哪些搜索源（去重后合并）
-- `has_abstract`：标记是否有摘要，影响打分时关键词匹配度的计算
-- `raw`：保留原始 API 响应的关键字段，供调试
+## 评分模式
 
-### top_n_dois.json（阶段 3 输出 → 阶段 4 输入）
+`config/scoring.yaml` 提供三种模式：
 
-```json
-{
-  "run_id": "20260528-plant-genome",
-  "created_at": "2026-05-28T22:10:00+08:00",
-  "config": {
-    "keywords": ["plant genome foundation model"],
-    "top_n": 10,
-    "scoring_config": "references/scoring-rules.yaml"
-  },
-  "papers": [
-    {
-      "doi": "10.1038/s41586-024-07189-3",
-      "title": "A foundation model for plant genomics",
-      "year": 2024,
-      "venue": "Nature",
-      "citation_count": 42,
-      "score": 0.82,
-      "score_breakdown": {
-        "keyword_match": 0.90,
-        "citation_weighted": 0.70,
-        "recency_decay": 0.92,
-        "journal_quality": 1.00
-      },
-      "has_abstract": true
-    }
-  ]
-}
-```
+- `frontier`：默认。提高近年论文、预印本、可下载性、方法/benchmark 权重。
+- `foundation`：提高引用数和期刊质量权重，适合找经典论文和综述。
+- `balanced`：折中模式，接近旧版公式。
 
-### pipeline_state.json（断点续跑状态）
-
-```json
-{
-  "run_id": "20260528-plant-genome",
-  "status": "stage_3_completed",
-  "current_stage": 4,
-  "params_path": "pipeline_params.json",
-  "artifacts": {
-    "stage_2": "search_results.json",
-    "stage_3": "top_n_dois.json"
-  },
-  "fetch_progress": {
-    "total": 10,
-    "succeeded": ["10.1038/...", "10.1016/..."],
-    "failed": [{"doi": "10.1126/...", "reason": "no_fulltext"}],
-    "pending": ["10.1101/..."]
-  },
-  "created_at": "2026-05-28T22:00:00+08:00",
-  "updated_at": "2026-05-28T22:30:00+08:00"
-}
-```
-
-断点续跑逻辑：
-- SKILL.md 启动时检查当前目录是否存在 `pipeline_state.json`
-- 若存在且 `status` 不是 `completed`，向用户报告上次进度并询问"续跑还是重新开始"
-- 若用户选择续跑，从 `current_stage` 和 `fetch_progress.pending` 继续
-- 若用户换了关键词（`run_id` 不同），清除旧状态重新开始
-
----
-
-## 打分公式
-
-打分前先执行**预筛**（阶段 3a，详见 score_papers.py 预筛逻辑），排除明显不相关的论文。通过预筛的论文再进入正式打分（阶段 3b）。
-
-```
-总分 = w_kw * 关键词匹配度 + w_cit * 引用数加权 + w_rec * 时效衰减 + w_jrn * 期刊质量
-```
-
-默认权重 `w_kw=0.40, w_cit=0.30, w_rec=0.20, w_jrn=0.10`，所有权重和参数写在 `references/scoring-rules.yaml`。
-
-关键词匹配度计算时，若 `keyword_weights` 中指定了某关键词的权重，该关键词命中时按权重计分而非简单计数。
-
-### 各维度计算方式
-
-#### 关键词匹配度（w_kw = 0.40）
-
-```
-关键词匹配度 = 命中关键词数 / 关键词总数
-```
-
-匹配规则：
-1. **大小写不敏感**：统一 lower() 后匹配
-2. **去标点**：移除标题/摘要中的标点后匹配
-3. **子串匹配**：关键词 "genome" 可匹配 "genomics"、"genomic"（词干级别）
-4. **短语优先**：多词关键词（如 "plant genome"）作为整体匹配，命中则该短语记为 1 次命中，不再拆词重复计算
-5. **无摘要降权**：若论文缺少摘要（`has_abstract=false`），关键词匹配度按 `0.5 * 实际值` 计算，因为仅标题匹配的区分度低
-
-#### 引用数加权（w_cit = 0.30）
-
-```
-引用数加权 = log(引用数 + 1) / log(citation_max + 1)
-```
-
-- `citation_max` 默认值为 **5000**（可通过 YAML 调整），而非硬编码 1000
-- 使用对数归一化避免少数超高引论文独占，同时 `citation_max=5000` 保证高引区间仍有区分度
-- 引用数为 0 的论文该维度得 0，但不影响其他维度
-
-#### 时效衰减（w_rec = 0.20）
-
-```
-时效衰减 = max(floor, exp(-λ * 论文年龄))
-```
-
-- `λ`（衰减速率）默认 **0.3**，可通过 YAML 调整
-- `floor`（衰减下限）默认 **0.1**，保证 >5 年的老论文不会直接归零
-- 论文年龄 = 当前年份 - 发表年份
-- 示例：1 年 → 0.74，3 年 → 0.41，5 年 → 0.22，10 年 → 0.05（不低于 0.1）
-
-#### 期刊质量（w_jrn = 0.10）
-
-期刊分层映射表写在 `references/journal-tiers.yaml`，按以下规则判定：
-
-```yaml
-# journal-tiers.yaml 结构
-tiers:
-  tier1:  # 分值 1.0
-    keywords: ["nature", "science", "cell"]
-    exact: ["Nature", "Science", "Cell"]
-  tier1_sub:  # 子刊 分值 0.9
-    keywords: ["nature communications", "nature genetics", "nature methods", "nature biotechnology", "cell reports", "cell systems"]
-    exact: []
-  tier2:  # 领域顶刊 分值 0.6
-    keywords: ["pnas", "genome research", "genome biology", "nucleic acids research", "bioinformatics", "plant cell", "plant journal", "new phytologist"]
-    exact: []
-  default: 0.2  # 未匹配到的期刊默认分值
-```
-
-匹配流程：
-1. 将论文 `venue` 字段 lower() + 去标点后，先尝试 `exact` 精确匹配
-2. 再尝试 `keywords` 中的子串匹配
-3. 未匹配到任何条目则使用 `default` 分值
-4. arXiv 预印本（无 venue）使用 `default` 分值
-
----
-
-## 搜索策略
-
-### 搜索源
-
-| API | 请求频率 | 返回字段 | 覆盖范围 | 前沿性 |
-|---|---|---|---|---|
-| Semantic Scholar | 1 req/s（免费） | 标题、DOI、摘要、引用数、年份、venue、paperType | 综合学术 | 中（索引有 1-3 月延迟） |
-| Crossref | 50 req/s（免费） | 标题、DOI、作者、期刊、摘要（部分） | 元数据最全 | 低（正式发表后收录） |
-| arXiv | 无限制 | 标题、arXiv ID、摘要、分类 | CS/物理/定量生物 | 高（预印本首发） |
-| bioRxiv | 无限制（免费） | 标题、DOI、摘要、分类、发布日期 | 生命科学预印本 | **极高**（比正式发表早 6-12 月） |
-| PubMed | 10 req/s（免费，需 API key） | 标题、DOI、摘要、期刊、MeSH 词 | 生物医学最全索引 | 中（含 ahead-of-print） |
-
-**前沿性说明：** 对于"捕捉领域最新趋势"的核心目标，bioRxiv 是最关键的搜索源——生命科学领域大量重要工作以预印本首发，比正式发表早 6-12 个月。仅依赖 Semantic Scholar + Crossref + arXiv 会系统性遗漏生物/医学方向的最新工作。
-
-**搜索源选择策略：**
-- 默认开启：Semantic Scholar + Crossref + arXiv + bioRxiv（4 源）
-- 当 `domain` 包含生命科学关键词（如 `plant_genomics`、`single_cell`、`epigenomics`）时，自动开启 PubMed
-- 用户可在阶段 1 通过 `search_sources` 参数手动选择搜索源组合
-
-### 搜索策略
-
-- 每个关键词组合在所有已开启的 API 上并行查询
-- 每个 API 返回上限 100 条（可通过 `--max-results` 配置）
-- 多路结果合并后去重（见下方去重策略）
-
-### 去重策略
-
-去重分三级，依次执行：
-
-**第 1 级：DOI 精确去重**
-- 同一 DOI 出现在多个来源 → 合并 `source` 数组，保留最完整的摘要（优先 Semantic Scholar）
-- 无 DOI 的论文（部分 arXiv）进入第 2 级
-
-**第 2 级：arXiv ID ↔ DOI 映射**
-- 对有 arXiv ID 的论文，通过 Semantic Scholar 的 `externalIds` 字段查找对应 DOI
-- 若找到 DOI 且该 DOI 已在结果中 → 合并；若未找到 → 保留，标记 `arxiv_only=true`
-
-**第 3 级：标题模糊去重**
-- 标题归一化：lower() + 去标点 + 去连字符 + 去多余空格 → 单一比较串
-- 归一化后完全相同的标题视为重复 → 合并，保留有 DOI 的版本
-- 不做编辑距离匹配（避免误合并不同论文）
-
-去重后报告格式：
-```
-搜索结果统计：
-  Semantic Scholar: 85 篇
-  Crossref: 120 篇
-  arXiv: 42 篇
-  bioRxiv: 35 篇
-  PubMed: 68 篇
-  去重前总计: 350 篇
-  DOI 去重: -45 篇
-  arXiv/bioRxiv ID 映射去重: -18 篇
-  标题模糊去重: -22 篇
-  去重后总计: 265 篇
-  摘要覆盖率: 72%
-```
-
----
-
-## 错误处理策略
-
-### 搜索阶段（阶段 2）
-
-| 故障 | 处理 | 用户通知 |
-|---|---|---|
-| 单个 API 返回 429/500 | 指数退避重试（最多 3 次，间隔 2s/4s/8s） | 重试成功则静默，3 次均失败则在报告中标注 |
-| 单个 API 完全不可达 | 跳过该 API，使用其余 API 的结果 | 报告中标注该 API 失败 |
-| 所有 API 全部失败 | 写空结果文件，退出码 2 | 告知用户搜索失败，建议检查网络或换关键词 |
-| 搜索结果为零 | 写空结果文件，退出码 0 | 告知用户无结果，建议调整关键词或扩大时间范围 |
-
-### 下载阶段（阶段 4）
-
-| 故障 | 处理 | 用户通知 |
-|---|---|---|
-| 单篇论文无全文（付费墙等） | 标记为 `metadata_only`，保存元数据摘要 | 每 3 篇进度报告中标注 |
-| 单篇论文 MCP 调用超时/报错 | 跳过该篇，记入 `pipeline_state.json` 的 failed 列表 | 进度报告中标注失败原因 |
-| 连续 3 篇失败 | 暂停下载，向用户报告并询问是否继续 | BLOCKING：需用户确认 |
-
-### 审阅阶段（阶段 5）
-
-| 故障 | 处理 | 用户通知 |
-|---|---|---|
-| 论文仅有摘要 | 按"摘要级审阅"生成笔记，标题标注 `[摘要]` | 笔记中标注数据来源为摘要 |
-| 论文 Markdown 解析异常 | 跳过该篇，记录到 failed 列表 | 最终报告标注 |
-
-### 恢复策略
-
-所有阶段遵循 **continue-on-error** 原则：单篇/单源失败不阻塞整体流程。失败详情记录在 `pipeline_state.json`，阶段 5 结束后输出一份失败汇总报告。
-
----
-
-## 用户交互节点
-
-| 节点 | 用户操作 | 默认行为 |
-|---|---|---|
-| 阶段 1 结束 | 确认关键词、时间范围、保存偏好 | — |
-| 阶段 2 结束 | 查看搜索来源统计 + 去重统计，可调整关键词重新搜索 | — |
-| 阶段 3 结束 | 查看 Top N 列表 + 分数明细，可手动剔除/增加论文 | 默认接受 Top N |
-| 阶段 4 连续 3 篇失败 | 决定是否继续下载 | — |
-| 阶段 4 进行中 | 无需操作 | 每 3 篇报告进度（含成功/失败） |
-| 阶段 5 结束 | 查看生成的 Obsidian 笔记 | — |
-
----
-
-## 领域审阅补充模板
-
-领域补充模板存放在 `references/domain-supplement.yaml`，支持多领域切换：
-
-```yaml
-# domain-supplement.yaml
-plant_genomics:
-  name: "植物基因组"
-  keywords: ["plant genome", "crop genome", "plant LLM", "gene discovery"]
-  extra_sections:
-    - title: "物种信息"
-      fields:
-        - label: "学名"
-        - label: "品种/品系"
-        - label: "基因组版本"
-    - title: "训练数据"
-      fields:
-        - label: "数据集名称"
-        - label: "样本量（正/负）"
-        - label: "负样本构建方式"
-    - title: "模型架构"
-      fields:
-        - label: "模型类型（Transformer/CNN/GNN/混合）"
-        - label: "参数规模"
-        - label: "输入序列长度"
-    - title: "下游任务"
-      fields:
-        - label: "基因发现 / 表达预测 / 变异效应预测 / 染色质状态 / 其他"
-    - title: "与项目指标关联"
-      fields:
-        - label: "本项目研究物种是否与该论文物种相同/近缘"
-        - label: "论文方法是否可迁移到本项目物种"
-
-# 示例：未来可扩展
-# single_cell:
-#   name: "单细胞组学"
-#   keywords: ["single cell", "scRNA-seq", "spatial transcriptomics"]
-#   extra_sections:
-#     - title: "实验平台"
-#       fields:
-#         - label: "测序平台"
-#         - label: "建库方法"
-#         - label: "细胞数"
-```
-
-AI 在阶段 5 生成笔记时：
-1. 读取 paper-obsidian-review SKILL.md 获取标准单篇/对比笔记结构
-2. 从 `domain-supplement.yaml` 读取当前领域（由 `pipeline_params.json` 中的 `domain` 指定）的额外章节
-3. 在标准结构的"与指标关联"章节之前，插入领域专属章节
-
----
-
-## 环境依赖
-
-```
-Python 3.13（管理版，在 .venv 中运行）
-httpx          # HTTP 客户端，调搜索 API
-PyYAML         # 读 scoring-rules.yaml / domain-supplement.yaml / journal-tiers.yaml
-```
-
-不依赖 paper-fetch 或 paper-obsidian-review 的任何代码。阶段 4 通过 MCP 工具调用，阶段 5 通过 SKILL.md 引用。
-
----
-
-## 安装方式
+CLI：
 
 ```bash
-# SKILL.md 放到 WorkBuddy skills 目录（AI 自动识别）
-mkdir -p ~/.workbuddy/skills/auto-paper-pipeline
-cp SKILL.md ~/.workbuddy/skills/auto-paper-pipeline/
-
-# Python 脚本和 venv 放到 .tools/ 下（遵循项目约定，不污染系统）
-mkdir -p /path/to/vault/.tools/auto-paper-pipeline
-cp -r scripts/ /path/to/vault/.tools/auto-paper-pipeline/scripts/
-cp -r references/ /path/to/vault/.tools/auto-paper-pipeline/references/
-
-# 安装 Python 依赖
-python3 -m venv /path/to/vault/.tools/auto-paper-pipeline/.venv
-/path/to/vault/.tools/auto-paper-pipeline/.venv/bin/pip install httpx PyYAML
+.venv/bin/python pipeline/score.py \
+  --input outputs/<run_id>/search_results.json \
+  --config config/scoring.yaml \
+  --params outputs/<run_id>/pipeline_params.json \
+  --scoring-mode frontier \
+  --relevance-profile plant_genome_llm \
+  --top-n 20 \
+  --output outputs/<run_id>/top_n_dois.json
 ```
 
-SKILL.md 中的脚本路径写相对于 vault 根目录的路径：`.tools/auto-paper-pipeline/scripts/search_papers.py`。
+## 主题相关性 Profile（V1.2）
 
----
+V1.2 新增 `config/relevance_profiles.yaml`，用于解决测试中出现的排序过宽问题。
 
-## 前置依赖 Skill
+以 `plant_genome_llm` 为例，Top N 应优先满足三个 required concept groups：
 
-| Skill | 用途 | 协作方式 | 最低版本 | 状态 |
-|---|---|---|---|---|
-| paper-fetch-skill | 下载论文全文（Markdown） | MCP 直调 + 健康检查 + CLI 降级（详见组件协作机制） | >=0.1.0 | ✅ 已安装 |
-| paper-obsidian-review | 结构化审阅模板 | SKILL.md 引用式读取模板结构，AI 按合并模板生成 | — | ✅ 已安装 |
+- `plant_domain`：plant、crop、rice、wheat、maize、Arabidopsis、root、breeding 等
+- `genomics`：genome、genomic、gene、annotation、regulatory element、sequence、variant 等
+- `ai_model`：foundation model、genomic language model、large language model、LLM、transformer、SparseMoE 等
 
----
+阶段 3 使用：
 
-## 后续扩展计划
+```bash
+.venv/bin/python pipeline/score.py \
+  --input outputs/<run_id>/search_results.json \
+  --config config/scoring.yaml \
+  --scoring-mode frontier \
+  --relevance-profile plant_genome_llm \
+  --top-n 20 \
+  --output outputs/<run_id>/top_n_dois.json
+```
 
-- [x] 支持 bioRxiv/PubMed 作为搜索源（v0.3 已加入）
-- [ ] 支持 Google Scholar 作为额外搜索源
-- [ ] 增量模式：每周自动搜索新论文，和已有库对比去重
-- [ ] 定时任务：通过 WorkBuddy automation 每周自动运行
-- [ ] 多领域关键词模板：单细胞组学、表观遗传学等
-- [ ] 搜索质量反馈循环：用户标记"不相关"后调整打分权重
+输出新增字段：
 
----
+- `topic_relevance`
+- `matched_concept_groups`
+- `missing_required_groups`
+- `relevance_flags`
 
-## 版本
+若命中所有 required groups 的论文少于 5 篇，则触发 soft fallback，不再出现完整短语预筛把结果全部排空的问题。
 
-- v0.4 — 2026-05-29 — 搜索源配置去冗余重构：引入 search_source_registry.yaml 唯一权威入口；打分阶段新增可下载性加分；search-apis.md 改为自动生成
-- v0.3 — 2026-05-29 — 增加 bioRxiv/PubMed 搜索源；完善阶段 1 参数（排除关键词、关键词权重、论文类型、vault_root、search_queries）；增加阶段 3a 预筛逻辑；MCP 健康检查 + CLI 降级方案 + 版本依赖声明；增加 abstract_coverage 统计
-- v0.2 — 2026-05-28 — 补充组件协作机制、CLI 接口、JSON Schema、去重策略、错误处理、打分公式细节
-- v0.1 — 2026-05-28 — 初版产品文档
+## Markdown 阅读报告
 
----
+阶段 6 输出：
 
-## 开发经验
+```text
+outputs/<run_id>/阅读报告.md
+```
 
-### [v0.4] 搜索源配置去冗余重构
+只生成这一个 Markdown 文件。报告结构参考 `paper-obsidian-review` 的学术中文标题，但把单篇笔记、多篇对比、复现建议和证据审计压缩到同一篇报告中。
 
-**核心问题**：搜索源配置散落在 3 处（`search_papers.py` 硬编码常量、`SKILL.md` 默认值、`search-apis.md` 手写文档），导致：
-1. 新增搜索源需改 3 处代码+文档，且容易遗漏
-2. `search-apis.md` 与代码不同步（arXiv 端点已有 HTTP vs HTTPS 不一致）
-3. 打分阶段不知道论文能否被 paper-fetch 下载，搜索结果大量来自不支持的出版社（Frontiers/Wiley/Elsevier），阶段 4 全部落空
+### 阅读报告.md
 
-**解决思路**：
-- 引入 `references/search_source_registry.yaml` 作为**唯一权威配置入口**，同时包含搜索源定义和可下载能力矩阵
-- Python 代码从 YAML 动态加载，消除硬编码常量
-- `search-apis.md` 改为从 YAML 自动生成，彻底消除文档与代码的 drift
-- 打分阶段新增 `downloadability_bonus` 维度，对论文 DOI 做 provider 匹配，从源头引导搜索结果偏向"能实际下载"的论文
+- 基本信息
+- 核心结论摘要
+- 研究背景与问题
+- 核心科学问题
+- 论文总览表
+- 阅读路线
+- 逐篇阅读笔记
+- 横向对比
+- 方法路线与技术趋势
+- 复现优先级建议
+- 证据审计与失败记录
+- 开放问题与下一步检索
 
-**关键改动点**：
+逐篇阅读笔记参考 `paper-obsidian-review` 的结构，包含：基本信息、研究背景与问题动因、核心科学问题、问题求解路径、方法定位、输入输出、方法框架、关键机制、主要创新贡献、数据集/实验设置/配置依赖、复现要点、与研究指标关联、为什么入选。
 
-| 文件 | 变更类型 | 说明 |
-|------|---------|------|
-| `references/search_source_registry.yaml` | 新增 | 唯一权威搜索源配置，含 sources 节 + downloadable_providers 节 |
-| `scripts/search_papers.py` | 重构 | `DEFAULT_SOURCES`/`VALID_SOURCES` 改为从 registry 动态加载；`_request_with_retry` 的重试参数从 registry 按源读取 |
-| `scripts/score_papers.py` | 重构 | 新增 `get_downloadability()` 函数和 `downloadability_bonus` 评分维度；综合评分公式加入可下载性加分 |
-| `scripts/generate_search_docs.py` | 新增 | 从 YAML 自动生成 search-apis.md 的工具脚本 |
-| `references/search-apis.md` | 自动生成 | 改为由脚本生成，文件头标注"请勿手动修改" |
-| `references/scoring-rules.md` | 更新 | 新增第 5 维度"可下载性加分"说明及分值表 |
-| `SKILL.md` | 更构 | 新增"搜索源配置"章节说明职责边界；`search_sources` 默认值改为"参考 registry" |
+所有结论必须标注证据等级。
 
-**职责边界确立**：
-- `auto-paper-pipeline`（编排层）：读取 registry 的 `sources` 节驱动搜索，读取 `downloadable_providers` 节计算可下载性加分
-- `paper-fetch-skill`（全文获取层）：实际执行 DOI→Provider 路由和全文获取，不直接读取此配置
-- 两层通过 YAML 契约解耦，而非通过代码耦合
+## 证据等级
 
-**扩展性改进**：新增搜索源从"改 3 处代码+文档"降为"改 1 处 YAML + 写 1 个搜索函数"。
+- `fulltext_supported`：有论文全文支撑
+- `abstract_supported`：仅摘要支撑
+- `metadata_inferred`：仅标题、年份、venue、DOI 等元数据推断
+- `unknown`：材料不足
+
+摘要级材料不得补写实验细节、结果数值、局限性和作者未明确表达的结论。
+
+## 错误处理
+
+- 搜索源失败：记录错误，其他来源继续。
+- 搜索结果为零：阶段 2 BLOCKING，建议调整关键词或时间范围。
+- `paper-fetch` CLI 缺失：阶段 5 BLOCKING，提示安装。
+- 单篇下载失败：记录到 `pipeline_state.json`，并写入 `阅读报告.md` 的“证据审计与失败记录”章节。
+- 仅摘要或仅元数据：仍可写入阅读报告，但证据等级必须降级。
+
+## 验收标准
+
+1. 用户输入一个主题词即可完成 quick_explore 参数构造。
+2. `pipeline/score.py --scoring-mode frontier` 可运行，并在 `top_n_dois.json` 中输出新增字段。
+3. `frontier` 模式相对 `foundation` 更偏向新近、可下载、方法/benchmark 论文。
+4. `--relevance-profile plant_genome_llm` 能让 PlantGFM、PlantBiMoE、genomic language model 等核心论文进入前列，并压低弱相关论文。
+5. 阶段 6 不动态读取 `paper-obsidian-review`，只读取 `config/review_template.yaml`。
+6. 最终输出是单个 Markdown 阅读报告，而不是多个 Obsidian 文件组成的知识包。
+7. 摘要级和元数据级内容不会被写成全文级结论。
+
+## 当前实现状态（2026-05-31）
+
+本轮改动已落地到文档、Skill 指令、配置和评分脚本。
+
+### 已实现
+
+- `skills/auto-paper-pipeline/SKILL.md` 已更新为六阶段流程：参数确认、多源搜索、打分排序、主题聚类与阅读路线、批量下载、结构化审阅与阅读报告。
+- `config/scoring.yaml` 已支持三种评分模式：`frontier`、`foundation`、`balanced`，默认模式为 `frontier`。
+- `pipeline/score.py` 已新增 `--scoring-mode frontier|foundation|balanced` 参数。
+- `top_n_dois.json` 的每篇论文已新增：
+  - `selection_reason`
+  - `risk_flags`
+  - `evidence_level`
+  - `download_provider`
+  - `download_reliability`
+  - `cluster_id`
+  - `recommended_reading_order`
+- `config/review_template.yaml` 已新增，作为本项目稳定审阅模板；运行时不再动态读取 `paper-obsidian-review`。
+- `pipeline/search.py`、`pipeline/score.py`、`pipeline/download.py` 已加入 `from __future__ import annotations`，兼容当前 Python 3.9 虚拟环境。
+- `README.md`、`docs/architecture.md`、`docs/scoring-rules.md`、`docs/search-apis.md` 已同步到六阶段、CLI 下载、稳定模板和评分模式的新设计。
+
+### 已验证
+
+- Python 语法检查：
+
+```bash
+.venv/bin/python -m py_compile pipeline/score.py pipeline/search.py pipeline/download.py
+```
+
+- CLI 契约检查：
+
+```bash
+.venv/bin/python pipeline/score.py --help
+.venv/bin/python pipeline/search.py --help
+.venv/bin/python pipeline/download.py --help
+```
+
+- 配置解析检查：`config/*.yaml` 均可被 PyYAML 正常读取。
+- 临时 fixture 验证：`frontier` 模式优先新近方法论文，`foundation` 模式优先高引综述。
+- 代码格式检查：
+
+```bash
+git diff --check
+```
+
+### 尚未验证
+
+- 未执行真实联网搜索，原因是结果依赖外部 API、网络状态和限流。
+- 未执行真实 `paper-fetch` 下载，原因是依赖本机是否安装 `paper-fetch` CLI、provider 凭证和目标论文可访问性。
+- 阶段 4 的 `cluster_summary.json` 仍由 Skill 指令中的 AI 生成，当前没有单独脚本实现。
+- 阶段 6 的单文件 Markdown 阅读报告仍由 Skill 指令中的 AI 按 `config/review_template.yaml` 执行，当前没有单独脚本实现。
+
+## V1.2 实现状态（2026-05-31）
+
+本轮 V1.2 已根据“植物基因组 + 大模型”测试结果完成排序质量修复。
+
+### 已实现
+
+- 新增 `config/relevance_profiles.yaml`，首个 profile 为 `plant_genome_llm`。
+- `pipeline/score.py` 新增 `--relevance-profile` 参数。
+- `frontier` 模式新增 `topic_relevance` 权重，并降低仅靠新近性、期刊和可下载性上榜的概率。
+- `top_n_dois.json` 每篇论文新增：
+  - `topic_relevance`
+  - `matched_concept_groups`
+  - `missing_required_groups`
+  - `relevance_flags`
+- 新增 profile gate：优先保留命中 required concept groups 的论文；结果不足时 soft fallback。
+- 新增回归测试 `tests/test_relevance_scoring.py` 和 fixture `tests/fixtures/plant_genome_llm_search_results.json`。
+
+### V1.2 验证结果
+
+在本次真实搜索结果上，V1.2 输出 `outputs/20260531-plant-genome-llm-test/top_n_dois.v1_2.json`：
+
+- `Genomic language models with k-mer tokenization strategies...` 排名第 1。
+- `PlantGFM: A Genomic Foundation Model for Discovery and Creation of Plant Genes` 排名第 3。
+- `PlantBiMoE: A Bidirectional Foundation Model with SparseMoE for Plant Genomes` 排名第 4。
+- 初版 Top N 中靠前的弱相关论文 `Regulatory architecture...`、`From pollen precursor...`、`A conversational multi-agent AI system...` 已不在 V1.2 Top N 中。

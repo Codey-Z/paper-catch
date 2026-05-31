@@ -1,12 +1,83 @@
-# scoring-rules.yaml — 打分公式参数
+# scoring.yaml — 打分公式参数
 # 程序化读取，修改后立即生效
 
-# 综合评分权重
+# 默认评分模式：
+# - frontier：新领域快速探索，优先新近论文、预印本、可下载性、方法/benchmark
+# - foundation：领域基础梳理，优先高引经典和期刊质量
+# - balanced：保留旧版折中策略
+default_mode: frontier
+
+scoring_modes:
+  frontier:
+    weights:
+      topic_relevance: 0.50
+      keyword_match: 0.24
+      citation_weighted: 0.08
+      recency_decay: 0.12
+      journal_quality: 0.06
+    recency:
+      lambda: 0.45
+      floor: 0.1
+    downloadability_bonus:
+      high: 0.18
+      medium: 0.08
+      low: 0.0
+      none: -0.18
+    paper_type_bonus:
+      method: 0.08
+      dataset_benchmark: 0.08
+      empirical_study: 0.04
+      review_survey: 0.02
+      unknown: 0.0
+
+  foundation:
+    weights:
+      keyword_match: 0.35
+      citation_weighted: 0.38
+      recency_decay: 0.08
+      journal_quality: 0.19
+    recency:
+      lambda: 0.18
+      floor: 0.25
+    downloadability_bonus:
+      high: 0.08
+      medium: 0.03
+      low: 0.0
+      none: -0.08
+    paper_type_bonus:
+      review_survey: 0.08
+      method: 0.04
+      dataset_benchmark: 0.03
+      empirical_study: 0.03
+      unknown: 0.0
+
+  balanced:
+    weights:
+      keyword_match: 0.40
+      citation_weighted: 0.30
+      recency_decay: 0.20
+      journal_quality: 0.10
+    recency:
+      lambda: 0.3
+      floor: 0.1
+    downloadability_bonus:
+      high: 0.15
+      medium: 0.05
+      low: 0.0
+      none: -0.15
+    paper_type_bonus:
+      method: 0.04
+      dataset_benchmark: 0.04
+      empirical_study: 0.02
+      review_survey: 0.02
+      unknown: 0.0
+
+# 兼容旧版配置读取：无 scoring_modes 时使用此处权重
 weights:
-  keyword_match: 0.40    # 关键词匹配度权重
-  citation_weighted: 0.30  # 引用数加权权重
-  recency_decay: 0.20    # 时效衰减权重
-  journal_quality: 0.10  # 期刊质量权重
+  keyword_match: 0.40
+  citation_weighted: 0.30
+  recency_decay: 0.20
+  journal_quality: 0.10
 
 # 关键词匹配参数
 keyword:
@@ -30,7 +101,7 @@ recency:
 # 期刊质量参数见 journal-tiers.yaml
 
 # 可下载性加分（用于在 Top N 筛选中优先选择可下载的论文）
-# reliability 从 search_source_registry.yaml 的 downloadable_providers 读取
+# reliability 从 config/search_sources.yaml 的 downloadable_providers 读取
 downloadability_bonus:
   high: 0.15       # Springer/Nature/arXiv/PLOS — 无需凭证即可下载
   medium: 0.05     # MDPI/Copernicus — 大概率可下载

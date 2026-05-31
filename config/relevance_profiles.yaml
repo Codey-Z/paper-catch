@@ -1,0 +1,73 @@
+# Topic relevance profiles used by pipeline/score.py.
+# Profiles are domain-configurable concept-group matchers. They avoid hardcoding
+# a single field's search logic in Python while keeping ranking deterministic.
+
+version: 1
+
+profiles:
+  plant_genome_llm:
+    description: "Plant/crop genomics fused with foundation models, genomic language models, or LLM-style sequence models."
+    required_groups:
+      plant_domain:
+        - plant
+        - plants
+        - crop
+        - crops
+        - rice
+        - wheat
+        - maize
+        - arabidopsis
+        - soybean
+        - pea
+        - root
+        - breeding
+      genomics:
+        - genome
+        - genomes
+        - genomic
+        - genomics
+        - gene
+        - genes
+        - annotation
+        - regulatory element
+        - sequence
+        - variant
+        - variants
+        - breeding
+      ai_model:
+        - foundation model
+        - foundation models
+        - genomic foundation model
+        - genomic foundation models
+        - genomic language model
+        - genomic language models
+        - genome language model
+        - genome language models
+        - language model
+        - language models
+        - large language model
+        - large language models
+        - dna language model
+        - dna language models
+        - llm
+        - transformer
+        - sparsemoe
+    optional_groups:
+      downstream_task:
+        - gene discovery
+        - plant genes
+        - regulatory element strength
+        - genome annotation
+        - genomic prediction
+        - plant breeding
+        - genome editing
+        - variant interpretation
+    negative_patterns:
+      - human genome
+      - clinical
+      - patient
+      - patients
+      - medical imaging
+      - pan-drug
+    weak_threshold: 0.67
+    fallback_min_results: 5

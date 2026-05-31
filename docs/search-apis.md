@@ -1,7 +1,7 @@
 # 搜索 API 接口文档
 
-> 本文件由 `generate_search_docs.py` 从 `search_source_registry.yaml` 自动生成。
-> 请勿手动修改——修改 `search_source_registry.yaml` 后重新运行脚本即可。
+> 本文件描述 `config/search_sources.yaml` 中的搜索源配置。
+> 修改搜索源时，以 `config/search_sources.yaml` 为唯一事实源。
 
 ## 搜索源概览
 
