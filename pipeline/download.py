@@ -8,6 +8,8 @@ download.py — 论文批量下载脚本
 退出码：0=全部成功，1=部分失败，2=全部失败
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging

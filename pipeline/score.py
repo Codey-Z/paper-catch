@@ -8,6 +8,8 @@ score_papers.py — 论文打分排序脚本
 退出码：0=成功，1=输入文件读取失败或为空，2=配置文件格式错误
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -24,13 +26,17 @@ import yaml
 
 CURRENT_YEAR = datetime.now().year
 
-# 默认打分权重（与 scoring-rules.yaml 一致）
+# 默认打分权重（与 config/scoring.yaml 的 balanced 模式一致）
 DEFAULT_WEIGHTS = {
+    "topic_relevance": 0.0,
     "keyword_match": 0.40,
     "citation_weighted": 0.30,
     "recency_decay": 0.20,
     "journal_quality": 0.10,
 }
+
+DEFAULT_SCORING_MODE = "frontier"
+VALID_SCORING_MODES = {"frontier", "foundation", "balanced"}
 
 # 默认可下载性加分
 DEFAULT_DOWNLOADABILITY_BONUS = {
@@ -40,8 +46,18 @@ DEFAULT_DOWNLOADABILITY_BONUS = {
     "none": -0.2,
 }
 
+DEFAULT_PAPER_TYPE_BONUS = {
+    "method": 0.0,
+    "empirical_study": 0.0,
+    "review_survey": 0.0,
+    "dataset_benchmark": 0.0,
+    "unknown": 0.0,
+}
+
 # 搜索源注册表路径
 REGISTRY_PATH = Path(__file__).parent.parent / "config" / "search_sources.yaml"
+RELEVANCE_PROFILES_PATH = Path(__file__).parent.parent / "config" / "relevance_profiles.yaml"
+DEFAULT_RELEVANCE_PROFILE = "none"
 
 # 默认参数
 DEFAULT_CITATION_MAX = 5000
@@ -193,6 +209,8 @@ def score_papers(
     journal_tiers: dict,
     keyword_weights: dict[str, float] | None = None,
     downloadable_providers: list[dict] | None = None,
+    scoring_mode: str = DEFAULT_SCORING_MODE,
+    relevance_profile: dict | None = None,
 ) -> list[dict]:
     """
     对论文列表进行综合评分。
@@ -203,25 +221,30 @@ def score_papers(
     downloadable_providers = downloadable_providers or []
 
     # 读取配置
-    weights = config.get("weights", DEFAULT_WEIGHTS)
+    mode_config = resolve_scoring_mode(config, scoring_mode)
+    weights = mode_config.get("weights", DEFAULT_WEIGHTS)
+    w_topic = weights.get("topic_relevance", DEFAULT_WEIGHTS["topic_relevance"])
+    if relevance_profile is None:
+        w_topic = 0.0
     w_kw = weights.get("keyword_match", DEFAULT_WEIGHTS["keyword_match"])
     w_cit = weights.get("citation_weighted", DEFAULT_WEIGHTS["citation_weighted"])
     w_rec = weights.get("recency_decay", DEFAULT_WEIGHTS["recency_decay"])
     w_jrn = weights.get("journal_quality", DEFAULT_WEIGHTS["journal_quality"])
 
     # 可下载性加分配置
-    dl_bonus_config = config.get("downloadability_bonus", DEFAULT_DOWNLOADABILITY_BONUS)
+    dl_bonus_config = mode_config.get("downloadability_bonus", DEFAULT_DOWNLOADABILITY_BONUS)
+    type_bonus_config = mode_config.get("paper_type_bonus", DEFAULT_PAPER_TYPE_BONUS)
 
     # 关键词匹配参数
-    kw_config = config.get("keyword", {})
+    kw_config = mode_config.get("keyword", {})
     no_abstract_penalty = kw_config.get("no_abstract_penalty", DEFAULT_NO_ABSTRACT_PENALTY)
 
     # 引用数参数
-    cit_config = config.get("citation", {})
+    cit_config = mode_config.get("citation", {})
     citation_max = cit_config.get("citation_max", DEFAULT_CITATION_MAX)
 
     # 时效衰减参数
-    rec_config = config.get("recency", {})
+    rec_config = mode_config.get("recency", {})
     decay_lambda = rec_config.get("lambda", DEFAULT_LAMBDA)
     decay_floor = rec_config.get("floor", DEFAULT_FLOOR)
 
@@ -232,11 +255,17 @@ def score_papers(
     for p in papers:
         breakdown = {}
 
-        # ── 1. 关键词匹配度 ──
         title = p.get("title", "")
         abstract = p.get("abstract") or ""
         has_abstract = p.get("has_abstract", False)
         text = normalize_text(f"{title} {abstract}")
+
+        # ── 0. 主题相关性 ──
+        relevance = evaluate_topic_relevance(text, relevance_profile)
+        topic_relevance = relevance["topic_relevance"]
+        breakdown["topic_relevance"] = round(topic_relevance, 4)
+
+        # ── 1. 关键词匹配度 ──
 
         hit_count = 0.0
         for i, kw in enumerate(norm_keywords):
@@ -292,26 +321,279 @@ def score_papers(
         dl_bonus = dl_bonus_config.get(dl_reliability, 0.0)
         breakdown["downloadability"] = round(dl_bonus, 4)
         breakdown["download_provider"] = dl_provider
+        breakdown["download_reliability"] = dl_reliability
+
+        # ── 6. 论文类型加分 ──
+        inferred_type = infer_paper_type(title, abstract, p.get("paper_type")) or "unknown"
+        type_bonus = type_bonus_config.get(inferred_type, type_bonus_config.get("unknown", 0.0))
+        breakdown["paper_type_bonus"] = round(type_bonus, 4)
+        breakdown["paper_type"] = inferred_type
 
         # ── 综合评分 ──
         total_score = (
-            w_kw * keyword_match
+            w_topic * topic_relevance
+            + w_kw * keyword_match
             + w_cit * citation_weighted
             + w_rec * recency_decay
             + w_jrn * journal_quality
             + dl_bonus
+            + type_bonus
         )
+
+        evidence_level = infer_evidence_level(p)
+        cluster_id = infer_cluster_id(p, inferred_type)
 
         scored_paper = {
             **p,
             "score": round(total_score, 4),
             "score_breakdown": breakdown,
+            "selection_reason": build_selection_reason(
+                breakdown=breakdown,
+                paper=p,
+                scoring_mode=scoring_mode,
+                matched_concept_groups=relevance["matched_concept_groups"],
+            ),
+            "risk_flags": build_risk_flags(
+                paper=p,
+                evidence_level=evidence_level,
+                download_reliability=dl_reliability,
+                topic_relevance=topic_relevance,
+                missing_required_groups=relevance["missing_required_groups"],
+                relevance_flags=relevance["relevance_flags"],
+            ),
+            "evidence_level": evidence_level,
+            "download_provider": dl_provider,
+            "download_reliability": dl_reliability,
+            "cluster_id": cluster_id,
+            "topic_relevance": round(topic_relevance, 4),
+            "matched_concept_groups": relevance["matched_concept_groups"],
+            "missing_required_groups": relevance["missing_required_groups"],
+            "relevance_flags": relevance["relevance_flags"],
+            "profile_gate_passed": relevance["profile_gate_passed"],
         }
         scored.append(scored_paper)
 
     # 按分数降序排序
     scored.sort(key=lambda x: x["score"], reverse=True)
+    for order, paper in enumerate(scored, 1):
+        paper["recommended_reading_order"] = order
     return scored
+
+
+def resolve_scoring_mode(config: dict, scoring_mode: str) -> dict:
+    """合并全局配置与指定评分模式配置，兼容旧版扁平配置。"""
+    if scoring_mode not in VALID_SCORING_MODES:
+        raise ValueError(f"未知评分模式: {scoring_mode}")
+
+    mode_configs = config.get("scoring_modes", {})
+    mode_config = mode_configs.get(scoring_mode, {})
+
+    merged = dict(config)
+    merged.pop("scoring_modes", None)
+
+    for key, value in mode_config.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            nested = dict(merged[key])
+            nested.update(value)
+            merged[key] = nested
+        else:
+            merged[key] = value
+
+    return merged
+
+
+def evaluate_topic_relevance(text: str, profile: dict | None) -> dict:
+    """Evaluate concept-group relevance for a normalized title+abstract string."""
+    if not profile:
+        return {
+            "topic_relevance": 0.0,
+            "matched_concept_groups": [],
+            "missing_required_groups": [],
+            "relevance_flags": [],
+            "profile_gate_passed": True,
+        }
+
+    required_groups = profile.get("required_groups", {}) or {}
+    optional_groups = profile.get("optional_groups", {}) or {}
+    weak_threshold = float(profile.get("weak_threshold", 0.67))
+
+    matched_required = []
+    missing_required = []
+    for group, terms in required_groups.items():
+        if _any_term_matches(text, terms):
+            matched_required.append(group)
+        else:
+            missing_required.append(group)
+
+    matched_optional = []
+    for group, terms in optional_groups.items():
+        if _any_term_matches(text, terms):
+            matched_optional.append(group)
+
+    required_total = max(len(required_groups), 1)
+    required_score = len(matched_required) / required_total
+    optional_score = len(matched_optional) / max(len(optional_groups), 1) if optional_groups else 0.0
+
+    negative_hits = [
+        pattern
+        for pattern in profile.get("negative_patterns", []) or []
+        if normalize_text(str(pattern)) in text
+    ]
+    negative_penalty = 0.25 if negative_hits else 0.0
+    topic_relevance = max(0.0, min(1.0, 0.85 * required_score + 0.15 * optional_score - negative_penalty))
+
+    flags = []
+    if topic_relevance < weak_threshold:
+        flags.append("weak_topic_relevance")
+    for group in missing_required:
+        flags.append(f"missing_{group}_group")
+    if negative_hits:
+        flags.append("negative_pattern_hit")
+
+    return {
+        "topic_relevance": topic_relevance,
+        "matched_concept_groups": matched_required + matched_optional,
+        "missing_required_groups": missing_required,
+        "relevance_flags": flags,
+        "profile_gate_passed": not missing_required,
+    }
+
+
+def _any_term_matches(text: str, terms: list[str]) -> bool:
+    for term in terms or []:
+        if _term_matches(text, normalize_text(str(term))):
+            return True
+    return False
+
+
+def _term_matches(text: str, term: str) -> bool:
+    if not term:
+        return False
+    # Require token boundaries so short terms such as "llm" do not match
+    # unrelated substrings, and "moe" cannot match "metabolism".
+    pattern = r"(?<!\w)" + re.escape(term) + r"(?!\w)"
+    return re.search(pattern, text) is not None
+
+
+def infer_evidence_level(paper: dict) -> str:
+    """阶段 3 只能根据元数据/摘要判断证据等级，全文支持由阶段 6 再提升。"""
+    content_kind = str(paper.get("content_kind") or "").lower()
+    if content_kind == "fulltext" or paper.get("has_fulltext") is True:
+        return "fulltext_supported"
+    if paper.get("has_abstract"):
+        return "abstract_supported"
+    if paper.get("doi") or paper.get("arxiv_id") or paper.get("title"):
+        return "metadata_inferred"
+    return "unknown"
+
+
+def infer_cluster_id(paper: dict, inferred_type: str) -> str:
+    """用标题/摘要启发式生成第一版主题聚类标签。"""
+    title = paper.get("title", "")
+    abstract = paper.get("abstract") or ""
+    text = normalize_text(f"{title} {abstract}")
+
+    if inferred_type == "review_survey":
+        return "background_review"
+    if inferred_type == "dataset_benchmark":
+        return "dataset_benchmark"
+    if inferred_type == "method":
+        return "method_route"
+    if any(term in text for term in ["application", "case study", "clinical", "crop", "disease", "trait"]):
+        return "application_direction"
+    if any(term in text for term in ["benchmark", "dataset", "database", "corpus", "resource"]):
+        return "dataset_benchmark"
+    if any(term in text for term in ["method", "model", "framework", "algorithm", "architecture"]):
+        return "method_route"
+    return "general_context"
+
+
+def build_risk_flags(
+    paper: dict,
+    evidence_level: str,
+    download_reliability: str,
+    topic_relevance: float = 0.0,
+    missing_required_groups: list[str] | None = None,
+    relevance_flags: list[str] | None = None,
+) -> list[str]:
+    """生成用户确认 Top N 时需要看到的风险标记。"""
+    flags = []
+    missing_required_groups = missing_required_groups or []
+    relevance_flags = relevance_flags or []
+
+    flags.extend(relevance_flags)
+    for group in missing_required_groups:
+        flag = f"missing_{group}_group"
+        if flag not in flags:
+            flags.append(flag)
+    if 0 < topic_relevance < 0.67 and "weak_topic_relevance" not in flags:
+        flags.append("weak_topic_relevance")
+
+    if evidence_level == "metadata_inferred":
+        flags.append("metadata_only")
+    elif evidence_level == "abstract_supported":
+        flags.append("abstract_only_before_download")
+
+    if download_reliability == "none":
+        flags.append("no_download_provider")
+    elif download_reliability == "low":
+        flags.append("low_download_reliability")
+
+    if not paper.get("doi") and not paper.get("arxiv_id"):
+        flags.append("missing_persistent_id")
+
+    year = paper.get("year")
+    if isinstance(year, int) and CURRENT_YEAR - year >= 8:
+        flags.append("older_than_8_years")
+
+    return list(dict.fromkeys(flags))
+
+
+def build_selection_reason(
+    breakdown: dict,
+    paper: dict,
+    scoring_mode: str,
+    matched_concept_groups: list[str] | None = None,
+) -> str:
+    """生成一句话入选理由，帮助用户判断是否保留该论文。"""
+    reasons = []
+    matched_concept_groups = matched_concept_groups or []
+
+    if matched_concept_groups:
+        reasons.append("概念组命中：" + "/".join(matched_concept_groups[:4]))
+
+    if breakdown.get("keyword_match", 0) >= 0.7:
+        reasons.append("关键词高度匹配")
+    elif breakdown.get("keyword_match", 0) >= 0.4:
+        reasons.append("关键词中度匹配")
+
+    if breakdown.get("recency_decay", 0) >= 0.7:
+        reasons.append("发表时间较新")
+
+    if breakdown.get("citation_weighted", 0) >= 0.45:
+        reasons.append("引用影响力较高")
+
+    if breakdown.get("journal_quality", 0) >= 0.8:
+        reasons.append("期刊质量较高")
+
+    paper_type = breakdown.get("paper_type")
+    if paper_type == "method":
+        reasons.append("偏方法论文")
+    elif paper_type == "dataset_benchmark":
+        reasons.append("含数据集或 benchmark")
+    elif paper_type == "review_survey":
+        reasons.append("适合作为背景综述")
+
+    reliability = breakdown.get("download_reliability")
+    provider = breakdown.get("download_provider")
+    if reliability in {"high", "medium"} and provider:
+        reasons.append(f"全文获取可靠性为 {reliability}（{provider}）")
+
+    if not reasons:
+        reasons.append(f"在 {scoring_mode} 模式下综合分较高")
+
+    title = paper.get("title", "该论文")
+    return f"{title}: " + "；".join(reasons[:4])
 
 
 def _score_journal(venue: str, journal_tiers: dict) -> float:
@@ -412,6 +694,38 @@ def load_downloadable_providers(registry_path: str | Path | None = None) -> list
         return []
 
 
+def load_relevance_profile(profile_name: str | None, profile_path: str | Path | None = None) -> tuple[dict | None, str, bool]:
+    """
+    Load a relevance profile by name.
+
+    Returns (profile_config, effective_profile_name, available).
+    Missing config files fall back to none; unknown non-none profile names are
+    treated as configuration errors by the caller.
+    """
+    requested = profile_name or DEFAULT_RELEVANCE_PROFILE
+    if requested == DEFAULT_RELEVANCE_PROFILE:
+        return None, DEFAULT_RELEVANCE_PROFILE, True
+
+    path = Path(profile_path) if profile_path else RELEVANCE_PROFILES_PATH
+    if not path.exists():
+        logger.warning("相关性 profile 配置 %s 不存在，回退到 none", path)
+        return None, DEFAULT_RELEVANCE_PROFILE, False
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+    except (yaml.YAMLError, OSError) as e:
+        logger.warning("相关性 profile 配置读取失败: %s，回退到 none", e)
+        return None, DEFAULT_RELEVANCE_PROFILE, False
+
+    profiles = config.get("profiles", {})
+    if requested not in profiles:
+        raise KeyError(requested)
+    profile = profiles[requested] or {}
+    profile["name"] = requested
+    return profile, requested, True
+
+
 def get_downloadability(doi: str | None, arxiv_id: str | None, downloadable_providers: list[dict]) -> tuple[str | None, str]:
     """
     根据DOI前缀或arXiv ID判断论文可下载性。
@@ -441,6 +755,8 @@ def run_scoring(
     config_path: str,
     top_n: int,
     output_path: str,
+    scoring_mode: str = DEFAULT_SCORING_MODE,
+    relevance_profile_name: str = DEFAULT_RELEVANCE_PROFILE,
     exclude_keywords: list[str] | None = None,
     min_keyword_hits: int = 0,
     paper_types: list[str] | None = None,
@@ -485,6 +801,19 @@ def run_scoring(
 
     # ── 读取 pipeline_params.json ──
     params = load_params(params_path)
+    if scoring_mode == DEFAULT_SCORING_MODE and params.get("scoring_mode"):
+        scoring_mode = params.get("scoring_mode")
+    if scoring_mode not in VALID_SCORING_MODES:
+        print(f"错误：未知评分模式 {scoring_mode}，可选值: {sorted(VALID_SCORING_MODES)}", file=sys.stderr)
+        return 2
+    if relevance_profile_name == DEFAULT_RELEVANCE_PROFILE and params.get("relevance_profile"):
+        relevance_profile_name = params.get("relevance_profile")
+
+    try:
+        relevance_profile, effective_relevance_profile, relevance_profile_available = load_relevance_profile(relevance_profile_name)
+    except KeyError:
+        print(f"错误：未知相关性 profile {relevance_profile_name}", file=sys.stderr)
+        return 2
 
     # 从 params 合并参数（CLI 参数优先）
     if params:
@@ -540,11 +869,26 @@ def run_scoring(
         journal_tiers=journal_tiers,
         keyword_weights=keyword_weights,
         downloadable_providers=downloadable_providers,
+        scoring_mode=scoring_mode,
+        relevance_profile=relevance_profile,
     )
+
+    profile_gate_fallback = False
+    profile_gate_passed = len(scored)
+    if relevance_profile is not None:
+        gated = [p for p in scored if p.get("profile_gate_passed")]
+        fallback_min_results = int(relevance_profile.get("fallback_min_results", 5))
+        profile_gate_passed = len(gated)
+        if len(gated) >= fallback_min_results:
+            scored = gated
+        else:
+            profile_gate_fallback = True
 
     # ── 截断 Top N ──
     if top_n > 0:
         scored = scored[:top_n]
+    for order, paper in enumerate(scored, 1):
+        paper["recommended_reading_order"] = order
 
     # ── 构造输出 ──
     now = datetime.now(timezone.utc)
@@ -555,6 +899,11 @@ def run_scoring(
             "keywords": keywords,
             "top_n": top_n,
             "scoring_config": config_path,
+            "scoring_mode": scoring_mode,
+            "relevance_profile": effective_relevance_profile,
+            "relevance_profile_available": relevance_profile_available,
+            "profile_gate_fallback": profile_gate_fallback,
+            "profile_gate_passed": profile_gate_passed,
             "prefilter": {
                 "exclude_keywords": exclude_keywords or [],
                 "min_keyword_hits": min_keyword_hits,
@@ -577,7 +926,8 @@ def run_scoring(
             print(f"  {i}. [{p['score']:.4f}] {p.get('title', 'N/A')} ({p.get('year', '?')})")
             bd = p.get("score_breakdown", {})
             dl_prov = bd.get("download_provider", "—")
-            print(f"     关键词={bd.get('keyword_match', 0):.3f}  引用={bd.get('citation_weighted', 0):.3f}  时效={bd.get('recency_decay', 0):.3f}  期刊={bd.get('journal_quality', 0):.3f}  可下载性={bd.get('downloadability', 0):+.2f} [{dl_prov}]")
+            print(f"     主题={bd.get('topic_relevance', 0):.3f}  关键词={bd.get('keyword_match', 0):.3f}  引用={bd.get('citation_weighted', 0):.3f}  时效={bd.get('recency_decay', 0):.3f}  期刊={bd.get('journal_quality', 0):.3f}  类型={bd.get('paper_type_bonus', 0):+.2f}  可下载性={bd.get('downloadability', 0):+.2f} [{dl_prov}]")
+            print(f"     理由: {p.get('selection_reason', '')}")
 
     return 0
 
@@ -626,6 +976,17 @@ def main():
         type=int,
         default=10,
         help="截断数量，0 表示不截断（默认: 10）",
+    )
+    parser.add_argument(
+        "--scoring-mode",
+        choices=sorted(VALID_SCORING_MODES),
+        default=DEFAULT_SCORING_MODE,
+        help="评分模式：frontier=快速探索前沿，foundation=经典基础，balanced=折中（默认: frontier）",
+    )
+    parser.add_argument(
+        "--relevance-profile",
+        default=DEFAULT_RELEVANCE_PROFILE,
+        help="主题相关性 profile 名称；none 表示禁用（默认: none）",
     )
     parser.add_argument(
         "--exclude-keywords",
@@ -692,6 +1053,8 @@ def main():
         config_path=config_path,
         top_n=args.top_n,
         output_path=args.output,
+        scoring_mode=args.scoring_mode,
+        relevance_profile_name=args.relevance_profile,
         exclude_keywords=exclude_keywords,
         min_keyword_hits=args.min_keyword_hits,
         paper_types=paper_types,

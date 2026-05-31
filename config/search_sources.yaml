@@ -1,12 +1,11 @@
-# search_source_registry.yaml
-# 唯一权威搜索源配置——auto-paper-pipeline 和 paper-fetch-skill 共同参考
-# 修改此文件即可增删搜索源，无需改动 Python 代码
+# search_sources.yaml
+# 唯一权威搜索源配置——auto-paper-pipeline 读取
+# 修改源元数据以此文件为准；新增全新搜索源时仍需在 pipeline/search.py 注册 handler
 #
 # 职责边界：
 #   - auto-paper-pipeline（编排层）：读取 sources 节，驱动搜索 API 调用
-#   - paper-fetch-skill（全文获取层）：读取 downloadable_providers 节，
-#     驱动 DOI→Provider 路由和全文获取
-#   - 两者共享此配置但不交叉调用对方内部逻辑
+#   - paper-fetch CLI（全文获取层）：实际执行 DOI→Provider 路由和全文获取
+#   - pipeline/score.py 读取 downloadable_providers 节，预估下载可靠性
 
 version: 1
 
@@ -150,7 +149,7 @@ downloadable_providers:
     doi_prefixes: ["10.1101/"]
     domains: ["biorxiv.org", "medrxiv.org"]
     reliability: medium
-    note: "paper-fetch-skill 已内置 bioRxiv/medRxiv provider，支持 PDF 全文获取与 API 元数据检索"
+    note: "paper-fetch CLI 支持 bioRxiv/medRxiv provider，可获取 PDF 全文与 API 元数据"
 
   - provider: plos
     doi_prefixes: ["10.1371/"]

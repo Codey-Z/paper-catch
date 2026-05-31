@@ -1,6 +1,6 @@
-jian# paper-catch
+# paper-catch
 
-自动论文发现与审阅流水线：**多源搜索 → 预筛打分 → 批量下载 → 结构化审阅 → Obsidian 笔记**
+新领域快速探索流水线：**多源搜索 → 前沿优先排序 → 主题聚类 → 批量下载 → 结构化审阅 → 单个 Markdown 阅读报告**
 
 ## 目录结构
 
@@ -33,14 +33,15 @@ pip install -e paper-fetch-skill/
 .venv/bin/python pipeline/score.py --help
 ```
 
-## 五阶段流水线
+## 六阶段流水线
 
 | 阶段 | 输入 | 脚本/动作 | 输出 |
 |------|------|----------|------|
 | 1 参数确认 | 用户关键词 | AI 对话 | `pipeline_params.json` |
 | 2 多源搜索 | `pipeline_params.json` | `pipeline/search.py` | `search_results.json` |
 | 3 打分排序 | `search_results.json` | `pipeline/score.py` | `top_n_dois.json` |
-| 4 批量下载 | `top_n_dois.json` | `paper-fetch` CLI | `papers/fulltext/*.md` |
-| 5 结构化审阅 | `papers/fulltext/*.md` | AI (paper-obsidian-review) | `papers/reviews/*.md` |
+| 4 主题聚类与阅读路线 | `top_n_dois.json` | AI | `cluster_summary.json` |
+| 5 批量下载 | `top_n_dois.json` | `pipeline/download.py` + `paper-fetch` CLI | `papers/fulltext/*.md` |
+| 6 结构化审阅 | `papers/fulltext/*.md` | AI + `config/review_template.yaml` | `阅读报告.md` |
 
 详见 `skills/auto-paper-pipeline/SKILL.md`
