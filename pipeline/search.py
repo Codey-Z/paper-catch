@@ -824,6 +824,24 @@ def _merge_paper(target: dict, source: dict) -> None:
 # ──────────────────────── 主流程 ──────────────────────────────
 
 
+def load_pipeline_params(params_path: str | None) -> dict:
+    """Load stage 1 pipeline params when available."""
+    if not params_path:
+        return {}
+
+    path = Path(params_path)
+    if not path.exists():
+        raise FileNotFoundError(f"pipeline params not found: {params_path}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def generate_run_id(keywords: list[str]) -> str:
+    now = datetime.now(timezone.utc)
+    return now.strftime("%Y%m%d") + "-" + re.sub(r"[^a-zA-Z0-9]", "-", keywords[0])[:30]
+
+
 def run_search(
     keywords: list[str],
     sources: list[str],
@@ -831,6 +849,7 @@ def run_search(
     year_to: int,
     max_results: int,
     output_path: str,
+    params_path: str | None = None,
     verbose: bool = False,
     registry: dict | None = None,
 ) -> int:
@@ -846,9 +865,14 @@ def run_search(
     if registry is None:
         registry = load_registry()
 
-    # 生成 run_id
+    # 读取阶段 1 参数，优先透传 run_id，避免跨阶段产物分裂
     now = datetime.now(timezone.utc)
-    run_id = now.strftime("%Y%m%d") + "-" + re.sub(r"[^a-zA-Z0-9]", "-", keywords[0])[:30]
+    try:
+        params = load_pipeline_params(params_path)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"错误：pipeline_params.json 读取失败: {e}", file=sys.stderr)
+        return 1
+    run_id = params.get("run_id") or generate_run_id(keywords)
 
     all_papers: list[dict] = []
     all_errors: list[dict] = []
@@ -990,6 +1014,11 @@ def main():
         help="输出 JSON 路径",
     )
     parser.add_argument(
+        "--params",
+        default=None,
+        help="阶段 1 pipeline_params.json 路径；提供后优先透传其中的 run_id",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         default=False,
@@ -1018,6 +1047,7 @@ def main():
         year_to=args.year_to,
         max_results=args.max_results,
         output_path=args.output,
+        params_path=args.params,
         verbose=args.verbose,
         registry=registry,
     )

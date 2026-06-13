@@ -8,11 +8,11 @@ paper-catch 是一个新领域快速探索流水线，最终输出一个 Markdow
   -> [2] 多源搜索
   -> [3] 前沿优先打分
   -> [4] 主题聚类与阅读路线
-  -> [5] paper-fetch CLI 批量下载
+  -> [5] paper-fetch MCP/CLI 批量下载
   -> [6] 结构化审阅与阅读报告
 ```
 
-技术栈：Python 3.9+、httpx、PyYAML、paper-fetch CLI。
+技术栈：Python 3.9+、httpx、PyYAML、paper-fetch MCP/CLI。MCP 后端优先使用当前 Python 环境中的 Python MCP SDK；若当前环境没有 SDK，但 mcp.json 的 server command 是带有 SDK 的 Python 解释器，则借用该解释器执行轻量 MCP client。
 
 ## 目录职责
 
@@ -21,7 +21,7 @@ paper-catch/
 ├── pipeline/
 │   ├── search.py       # 阶段 2：多源搜索 + 去重
 │   ├── score.py        # 阶段 3：评分模式 + Top N 增强字段
-│   └── download.py     # 阶段 5：paper-fetch CLI 封装
+│   └── download.py     # 阶段 5：paper-fetch MCP/CLI 后端封装
 ├── config/
 │   ├── search_sources.yaml
 │   ├── scoring.yaml
@@ -60,7 +60,7 @@ AI 负责生成 `pipeline_params.json`。默认 `mode=quick_explore`，用户只
 
 ### 阶段 2：多源搜索
 
-`pipeline/search.py` 读取 `config/search_sources.yaml`，查询 Semantic Scholar、Crossref、arXiv、bioRxiv、PubMed 等来源，执行 DOI、arXiv ID 和标题去重，输出 `search_results.json`。
+`pipeline/search.py` 读取 `config/search_sources.yaml` 和阶段 1 的 `pipeline_params.json`，查询 Semantic Scholar、Crossref、arXiv、bioRxiv、PubMed 等来源，执行 DOI、arXiv ID 和标题去重，输出 `search_results.json`。`run_id` 必须优先透传自 `pipeline_params.json`。
 
 ### 阶段 3：打分排序
 
@@ -101,15 +101,16 @@ AI 负责生成 `pipeline_params.json`。默认 `mode=quick_explore`，用户只
 
 ### 阶段 5：批量下载
 
-`pipeline/download.py` 是 `paper-fetch` CLI 的封装层，负责：
+`pipeline/download.py` 是 paper-fetch 获取层的封装层，默认 `--fetch-backend auto`：优先连接本地 paper-fetch MCP server，MCP 不可用时回退 `paper-fetch` CLI。它负责：
 
 - 执行逐篇下载
 - 重试临时失败
 - 分类永久失败
 - 验证输出 Markdown 是否包含全文
 - 输出下载诊断
+- 写入 `pipeline_state.json`
 
-运行前必须确认 `paper-fetch` CLI 存在。CLI 缺失时暂停，不继续进入全文级审阅。
+运行前可用 `pipeline/download.py --check-backend --fetch-backend auto` 确认可用后端。若 MCP 和 CLI 都不可用，阶段 5 暂停，不继续进入全文级审阅。
 
 ### 阶段 6：结构化审阅与阅读报告
 
@@ -145,7 +146,7 @@ outputs/<run_id>/阅读报告.md
 
 ## 外部依赖边界
 
-- `paper-fetch`：作为 CLI 工具依赖，负责全文获取。
+- `paper-fetch`：作为外部全文获取能力，可通过 WorkBuddy 兼容 MCP server 或 CLI 使用。项目不 vendor、不 fork、不复制其 provider 逻辑；迁移安装时按 `README.md` 完成 MCP/CLI 后端配置、环境变量配置和 `--check-backend` 验证。
 - `paper-obsidian-review`：只作为模板设计来源，不作为运行时依赖。
 
 ## 证据等级
@@ -164,5 +165,5 @@ outputs/<run_id>/阅读报告.md
 - 文档、Skill 和脚本对阶段数量、路径和下载方式一致。
 - `pipeline/score.py --scoring-mode frontier|foundation|balanced` 可用。
 - `top_n_dois.json` 包含 Top N 增强字段。
-- paper-fetch CLI 缺失时阶段 5 明确暂停。
+- paper-fetch MCP 和 CLI 都不可用时阶段 5 明确暂停。
 - 最终输出是一个 Markdown 阅读报告。

@@ -58,12 +58,55 @@ mv "$TMP_DIR" "$DEST_DIR"
 
 echo "Installed auto-paper-pipeline to: $DEST_DIR"
 
+MCP_CONFIG_FOUND=""
+for candidate in \
+  "$ROOT_DIR/.workbuddy/mcp.json" \
+  "${HOME}/.workbuddy/mcp.json" \
+  "${HOME}/.config/paper-catch/mcp.json"
+do
+  if [[ -f "$candidate" ]] && grep -q '"paper-fetch"' "$candidate"; then
+    MCP_CONFIG_FOUND="$candidate"
+    break
+  fi
+done
+
+CLI_FOUND=""
 if command -v paper-fetch >/dev/null 2>&1; then
-  echo "Verified paper-fetch CLI on PATH: $(command -v paper-fetch)"
+  CLI_FOUND="$(command -v paper-fetch)"
+fi
+
+if [[ -n "$MCP_CONFIG_FOUND" ]]; then
+  echo "Detected paper-fetch MCP config: $MCP_CONFIG_FOUND"
+elif [[ -n "$CLI_FOUND" ]]; then
+  echo "Verified paper-fetch CLI on PATH: $CLI_FOUND"
 else
-  echo "Warning: paper-fetch CLI not found on PATH."
-  echo "Install Dictation354/paper-fetch-skill first:"
-  echo "  https://github.com/Dictation354/paper-fetch-skill"
+  echo "Warning: no paper-fetch MCP config or CLI found."
+  cat <<'EOF'
+Configure at least one paper-fetch backend before running stage 5 downloads.
+
+MCP config is preferred. The pipeline checks these WorkBuddy-compatible files:
+  .workbuddy/mcp.json
+  ~/.workbuddy/mcp.json
+  ~/.config/paper-catch/mcp.json
+
+CLI fallback is also supported.
+
+Recommended: install from upstream Releases:
+  https://github.com/Dictation354/paper-fetch-skill/releases
+
+Development/source install:
+  mkdir -p external
+  git clone https://github.com/Dictation354/paper-fetch-skill.git external/paper-fetch-skill
+  cd external/paper-fetch-skill
+  ./install.sh --lite
+  # Or install into the current Python environment:
+  # python3 -m pip install .
+
+Verify:
+  .venv/bin/python pipeline/download.py --check-backend --fetch-backend auto
+  paper-fetch --help
+  paper-fetch --query "10.1186/1471-2105-11-421" --output-dir /tmp/paper-fetch-smoke --artifact-mode none
+EOF
 fi
 
 ENV_FILE="${HOME}/.config/paper-fetch/.env"
@@ -71,7 +114,17 @@ if [[ -f "$ENV_FILE" ]]; then
   echo "Detected paper-fetch env file: $ENV_FILE"
 else
   echo "Warning: paper-fetch env file not found: $ENV_FILE"
-  echo "Copy .env.example there if you have not configured it yet."
+  cat <<EOF
+Create it before paper-fetch downloads:
+  mkdir -p "${HOME}/.config/paper-fetch"
+  cp "$ROOT_DIR/.env.example" "$ENV_FILE"
+
+Recommended minimum:
+  CROSSREF_MAILTO=your-email@example.com
+
+Elsevier full text additionally requires:
+  ELSEVIER_API_KEY=...
+EOF
 fi
 
 echo "Restart Codex to pick up the updated skill."

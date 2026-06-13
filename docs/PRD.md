@@ -2,7 +2,7 @@
 
 ## 产品定位
 
-Auto Paper Pipeline 是一个新领域快速探索 skill。用户输入一个主题词后，系统自动扩展英文查询，完成多源搜索、前沿优先排序、主题聚类、paper-fetch CLI 批量下载，并生成一个可直接阅读和放入 Obsidian 的 Markdown 阅读报告。
+Auto Paper Pipeline 是一个新领域快速探索 skill。用户输入一个主题词后，系统自动扩展英文查询，完成多源搜索、前沿优先排序、主题聚类、paper-fetch MCP/CLI 批量下载，并生成一个可直接阅读和放入 Obsidian 的 Markdown 阅读报告。
 
 目标不是单纯“下载论文并总结”，而是帮助用户快速形成对新研究方向的结构化理解：核心问题、技术路线、关键论文、阅读顺序、证据强弱和后续追踪点。
 
@@ -45,7 +45,7 @@ Auto Paper Pipeline 是一个新领域快速探索 skill。用户输入一个主
   - 输出 cluster_summary.json
   ↓
 阶段 5：批量下载
-  - pipeline/download.py 封装 paper-fetch CLI
+  - pipeline/download.py 封装 paper-fetch MCP/CLI 后端
   - 输出 papers/fulltext/*.md
   ↓
 阶段 6：结构化审阅与阅读报告
@@ -84,9 +84,11 @@ Auto Paper Pipeline 是一个新领域快速探索 skill。用户输入一个主
 
 ### paper-fetch
 
-本项目不重写全文获取能力。阶段 5 只通过 `paper-fetch` CLI 获取全文，由 `pipeline/download.py` 负责重试、错误分类和结果诊断。
+本项目不重写全文获取能力。阶段 5 通过 `pipeline/download.py` 调用 paper-fetch 获取层，默认 `--fetch-backend auto`：优先使用本地 paper-fetch MCP server，MCP 不可用时回退 `paper-fetch` CLI。`pipeline/download.py` 负责后端选择、重试、错误分类和结果诊断。
 
-若 `paper-fetch` 不存在，阶段 5 必须暂停，并提示用户安装 CLI。不得继续生成伪全文审阅。
+`paper-fetch` 是外部依赖，但不随本仓库自动安装。可迁移安装要求是：新用户必须能从 `README.md` 完成 MCP 或 CLI 后端配置、`~/.config/paper-fetch/.env` 配置，并通过 `pipeline/download.py --check-backend --fetch-backend auto` 验证至少一个后端可用。
+
+若 MCP 和 CLI 都不可用，阶段 5 必须暂停，并提示用户按 `README.md` 配置 MCP 或安装 CLI。不得继续生成伪全文审阅。
 
 ### paper-obsidian-review
 
@@ -129,6 +131,8 @@ config/review_template.yaml
   "created_at": "2026-05-31T00:00:00+08:00"
 }
 ```
+
+阶段 2 搜索必须通过 `--params outputs/<run_id>/pipeline_params.json` 读取并透传 `run_id`，不得在下游阶段重新生成同一轮运行的标识。
 
 ### top_n_dois.json
 
@@ -256,7 +260,7 @@ outputs/<run_id>/阅读报告.md
 
 - 搜索源失败：记录错误，其他来源继续。
 - 搜索结果为零：阶段 2 BLOCKING，建议调整关键词或时间范围。
-- `paper-fetch` CLI 缺失：阶段 5 BLOCKING，提示安装。
+- paper-fetch MCP 和 CLI 都不可用：阶段 5 BLOCKING，提示配置 MCP 或安装 CLI。
 - 单篇下载失败：记录到 `pipeline_state.json`，并写入 `阅读报告.md` 的“证据审计与失败记录”章节。
 - 仅摘要或仅元数据：仍可写入阅读报告，但证据等级必须降级。
 
